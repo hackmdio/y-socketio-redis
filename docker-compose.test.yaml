@@ -1,0 +1,19 @@
+services:
+  minio:
+    image: quay.io/minio/minio
+    command: server /data --console-address ":9001"
+    ports:
+      - 39000:9000
+      - 39001:9001
+  redis:
+    image: redis
+    ports:
+      - 36379:6379
+  postgres:
+    image: postgres
+    environment:
+      - POSTGRES_DB=yredis_tests
+      - POSTGRES_USER=yredis
+      - POSTGRES_PASSWORD=yredis
+    ports:
+      - 35432:5432
