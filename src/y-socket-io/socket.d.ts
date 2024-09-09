@@ -5,5 +5,3 @@ declare module 'socket.io' {
     user?: User
   }
 }
-
-export {}
