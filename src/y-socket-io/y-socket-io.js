@@ -2,6 +2,7 @@ import * as Y from 'yjs'
 import * as AwarenessProtocol from 'y-protocols/awareness'
 import * as promise from 'lib0/promise'
 import * as encoding from 'lib0/encoding'
+import * as decoding from 'lib0/decoding'
 import { assert } from 'lib0/testing.js'
 import { User } from './user.js'
 import * as api from '../api.js'
@@ -349,32 +350,37 @@ export class YSocketIO {
    * @returns {{ type: EventType, message: Uint8Array }}
    */
   fromRedis (message) {
-    const msg = new Uint8Array(message)
-    switch (msg[0]) {
+    const decoder = decoding.createDecoder(new Uint8Array(message))
+    const opt = decoding.readUint8(decoder)
+
+    switch (opt) {
       case protocol.messageSync: {
-        switch (msg[1]) {
+        const syncStep = decoding.readUint8(decoder)
+        const message = decoding.readVarUint8Array(decoder)
+        switch (syncStep) {
           case protocol.messageSyncStep1:
             return {
               type: 'sync-step-1',
-              message: msg.slice(3, msg.length)
+              message
             }
           case protocol.messageSyncStep2:
             return {
               type: 'sync-step-2',
-              message: msg.slice(3, msg.length)
+              message
             }
           case protocol.messageSyncUpdate:
             return {
               type: 'sync-update',
-              message: msg.slice(3, msg.length)
+              message
             }
         }
         break
       }
       case protocol.messageAwareness: {
+        const message = decoding.readVarUint8Array(decoder)
         return {
           type: 'awareness-update',
-          message: msg.slice(2, msg.length)
+          message
         }
       }
     }
