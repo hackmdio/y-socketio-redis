@@ -1,13 +1,9 @@
 {
-  "name": "@y/redis",
+  "name": "@hackmd/y-socketio-redis",
   "version": "0.0.1",
-  "description": "Scalable websocket provider for Yjs using redis",
+  "description": "Scalable Socket.IO provider for Yjs using redis",
   "sideEffects": false,
   "type": "module",
-  "funding": {
-    "type": "GitHub Sponsors ❤",
-    "url": "https://github.com/sponsors/dmonad"
-  },
   "scripts": {
     "dev": "concurrently -r 'npm run start:server' 'npm run start:worker' 'npm run minio'",
     "start:server": "node --env-file .env ./bin/server.js",
@@ -42,17 +38,14 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/yjs/y-redis.git"
+    "url": "git+https://github.com/hackmdio/y-socketio-redis.git"
   },
   "keywords": [
     "Yjs"
   ],
   "author": "Kevin Jahns <kevin.jahns@protonmail.com>",
   "license": "MIT",
-  "bugs": {
-    "url": "https://github.com/yjs/y-redis/issues"
-  },
-  "homepage": "https://github.com/yjs/y-redis#readme",
+  "homepage": "https://github.com/hackmdio/y-socketio-redis#readme",
   "standard": {
     "ignore": [
       "/dist",

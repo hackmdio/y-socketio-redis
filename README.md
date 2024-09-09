@@ -1,3 +1,6 @@
+> This is a fork of [y-redis@be833ff](https://github.com/yjs/y-redis/tree/be833ff1ccea630fbc45097cc3d122cc8a690733) with [y-socket.io](https://github.com/ivan-topp/y-socket.io) connection layer
+
+---
 
 # y-redis :tophat: 
 > y-websocket compatible backend using Redis for scalability. **This is beta
