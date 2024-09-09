@@ -1,7 +1,7 @@
 import type { User } from './user.js'
 
 declare module 'socket.io' {
-  class Socket {
+  interface Socket {
     user?: User
   }
 }
