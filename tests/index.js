@@ -12,7 +12,7 @@ runTests({
   api,
   auth,
   ws,
-  socketio,
+  socketio
 }).then((success) => {
   process.exit(success ? 0 : 1)
 })

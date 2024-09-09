@@ -20,11 +20,11 @@ class YWebsocketServer {
   /**
    * @param {uws.TemplatedApp} app
    */
-  constructor(app) {
+  constructor (app) {
     this.app = app
   }
 
-  async destroy() {
+  async destroy () {
     this.app.close()
   }
 }
@@ -40,7 +40,7 @@ export const createYWebsocketServer = async ({
   redisPrefix = 'y',
   port,
   store,
-  checkPermCallbackUrl,
+  checkPermCallbackUrl
 }) => {
   checkPermCallbackUrl += checkPermCallbackUrl.slice(-1) !== '/' ? '/' : ''
   const app = uws.App({})
@@ -72,7 +72,7 @@ export const createYWebsocketServer = async ({
         return {
           hasWriteAccess: perm.yaccess === 'rw',
           room,
-          userid: perm.yuserid || '',
+          userid: perm.yuserid || ''
         }
       } catch (e) {
         console.error('Failed to pull permissions from', { permUrl })
@@ -106,7 +106,7 @@ export const createYWebsocketServer = async ({
 export const createYSocketIOServer = async ({
   redisPrefix = 'y',
   port,
-  store,
+  store
 }) => {
   const httpServer = http.createServer((req, res) => {
     res.writeHead(200, { 'Content-Type': 'application/json' })
@@ -117,7 +117,7 @@ export const createYSocketIOServer = async ({
   const server = await registerYSocketIOServer(io, store, {
     redisPrefix,
     authenticate: async (socket) => {
-      const token = socket.handshake.query['yauth']
+      const token = socket.handshake.query.yauth
       if (!token) return null
       // verify that the user has a valid token
       const { payload: userToken } = await jwt.verifyJwt(
@@ -126,7 +126,7 @@ export const createYSocketIOServer = async ({
       )
       if (!userToken.yuserid) return null
       return { userid: userToken.yuserid }
-    },
+    }
   })
 
   httpServer.listen(port, undefined, undefined, () => {

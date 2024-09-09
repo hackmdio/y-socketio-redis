@@ -2,7 +2,11 @@ import * as Y from 'yjs'
 import * as bc from 'lib0/broadcastchannel'
 import * as AwarenessProtocol from 'y-protocols/awareness'
 import { Observable } from 'lib0/observable'
-import { io, Socket } from 'socket.io-client'
+import { io } from 'socket.io-client'
+
+/**
+ * @typedef {import('socket.io-client').Socket} ClientSocket
+ */
 
 /**
  * @typedef ProviderConfiguration
@@ -59,7 +63,7 @@ export class SocketIOProvider extends Observable {
   _broadcastChannel
   /**
    * The socket connection
-   * @type {Socket}
+   * @type {ClientSocket}
    * @public
    */
   socket
@@ -116,7 +120,7 @@ export class SocketIOProvider extends Observable {
    * @param {ProviderConfiguration=} options Configuration options to the SocketIOProvider
    * @param {Partial<import('socket.io-client').ManagerOptions & import('socket.io-client').SocketOptions>=} socketIoOptions optional overrides for socket.io
    */
-  constructor(
+  constructor (
     url,
     roomName,
     doc = new Y.Doc(),
@@ -125,7 +129,7 @@ export class SocketIOProvider extends Observable {
       awareness = new AwarenessProtocol.Awareness(doc),
       resyncInterval = -1,
       disableBc = false,
-      auth = {},
+      auth = {}
     } = {},
     socketIoOptions = undefined
   ) {
@@ -146,8 +150,8 @@ export class SocketIOProvider extends Observable {
       autoConnect: false,
       transports: ['websocket'],
       forceNew: true,
-      auth: auth,
-      ...socketIoOptions,
+      auth,
+      ...socketIoOptions
     })
     this._socketIoOptions = socketIoOptions
 
@@ -176,7 +180,7 @@ export class SocketIOProvider extends Observable {
    * Broadcast channel room getter
    * @type {string}
    */
-  get broadcastChannel() {
+  get broadcastChannel () {
     return this._broadcastChannel
   }
 
@@ -184,7 +188,7 @@ export class SocketIOProvider extends Observable {
    * URL getter
    * @type {string}
    */
-  get url() {
+  get url () {
     return this._url
   }
 
@@ -192,14 +196,14 @@ export class SocketIOProvider extends Observable {
    * Synchronized state flag getter
    * @type {boolean}
    */
-  get synced() {
+  get synced () {
     return this._synced
   }
 
   /**
    * Synchronized state flag setter
    */
-  set synced(state) {
+  set synced (state) {
     if (this._synced !== state) {
       this._synced = state
       this.emit('synced', [state])
@@ -272,17 +276,14 @@ export class SocketIOProvider extends Observable {
    * @readonly
    */
   initSystemListeners = () => {
-    if (typeof window !== 'undefined')
-      window.addEventListener('beforeunload', this.beforeUnloadHandler)
-    else if (typeof process !== 'undefined')
-      process.on('exit', this.beforeUnloadHandler)
+    if (typeof window !== 'undefined') { window.addEventListener('beforeunload', this.beforeUnloadHandler) } else if (typeof process !== 'undefined') { process.on('exit', this.beforeUnloadHandler) }
   }
 
   /**
    * Connect provider's socket
    * @type {() => void}
    */
-  connect() {
+  connect () {
     if (!this.socket.connected) {
       this.emit('status', [{ status: 'connecting' }])
       this.socket.connect()
@@ -313,7 +314,7 @@ export class SocketIOProvider extends Observable {
       this.socket.emit(
         'awareness-update',
         AwarenessProtocol.encodeAwarenessUpdate(this.awareness, [
-          this.doc.clientID,
+          this.doc.clientID
         ])
       )
     }
@@ -335,7 +336,7 @@ export class SocketIOProvider extends Observable {
    * Disconnect provider's socket
    * @type {() => void}
    */
-  disconnect() {
+  disconnect () {
     if (this.socket.connected) {
       this.disconnectBc()
       this.socket.disconnect()
@@ -346,7 +347,7 @@ export class SocketIOProvider extends Observable {
    * This function runs when the socket is disconnected and emits the socket event `awareness-update`
    * which removes this client from awareness.
    * @private
-   * @param {Socket.DisconnectReason} event The reason of the socket disconnection
+   * @param {import('socket.io-client').Socket.DisconnectReason} event The reason of the socket disconnection
    * @readonly
    */
   onSocketDisconnection = (event) => {
@@ -375,13 +376,10 @@ export class SocketIOProvider extends Observable {
    * Destroy the provider. This method clears the document, awareness, and window/process listeners and disconnects the socket.
    * @type {() => void}
    */
-  destroy() {
+  destroy () {
     if (this.resyncInterval != null) clearInterval(this.resyncInterval)
     this.disconnect()
-    if (typeof window !== 'undefined')
-      window.removeEventListener('beforeunload', this.beforeUnloadHandler)
-    else if (typeof process !== 'undefined')
-      process.off('exit', this.beforeUnloadHandler)
+    if (typeof window !== 'undefined') { window.removeEventListener('beforeunload', this.beforeUnloadHandler) } else if (typeof process !== 'undefined') { process.off('exit', this.beforeUnloadHandler) }
     this.awareness.off('update', this.awarenessUpdate)
     this.awareness.destroy()
     this.doc.off('update', this.onUpdateDoc)
@@ -404,7 +402,7 @@ export class SocketIOProvider extends Observable {
           this._broadcastChannel,
           {
             type: 'sync-update',
-            data: update,
+            data: update
           },
           this
         )
@@ -442,7 +440,7 @@ export class SocketIOProvider extends Observable {
           data: AwarenessProtocol.encodeAwarenessUpdate(
             this.awareness,
             changedClients
-          ),
+          )
         },
         this
       )
@@ -495,8 +493,8 @@ export class SocketIOProvider extends Observable {
       {
         type: 'awareness-update',
         data: AwarenessProtocol.encodeAwarenessUpdate(this.awareness, [
-          this.doc.clientID,
-        ]),
+          this.doc.clientID
+        ])
       },
       this
     )
@@ -517,7 +515,7 @@ export class SocketIOProvider extends Observable {
           this.awareness,
           [this.doc.clientID],
           new Map()
-        ),
+        )
       },
       this
     )
@@ -542,7 +540,7 @@ export class SocketIOProvider extends Observable {
             this._broadcastChannel,
             {
               type: 'sync-step-2',
-              data: Y.encodeStateAsUpdate(this.doc, message.data),
+              data: Y.encodeStateAsUpdate(this.doc, message.data)
             },
             this
           )
@@ -564,7 +562,7 @@ export class SocketIOProvider extends Observable {
               data: AwarenessProtocol.encodeAwarenessUpdate(
                 this.awareness,
                 Array.from(this.awareness.getStates().keys())
-              ),
+              )
             },
             this
           )

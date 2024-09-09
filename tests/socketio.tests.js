@@ -13,7 +13,7 @@ import { SocketIOProvider } from '../src/y-socket-io/client.js'
 const authToken = await jwt.encodeJwt(utils.authPrivateKey, {
   iss: 'my-auth-server',
   exp: time.getUnixTime() + 60 * 60 * 1000, // token expires in one hour
-  yuserid: 'user1', // fill this with a unique id of the authorized user
+  yuserid: 'user1' // fill this with a unique id of the authorized user
 })
 
 /**
@@ -45,7 +45,7 @@ const createServer = async () => {
   const server = await createYSocketIOServer({
     port: utils.yredisPort,
     store: utils.store,
-    redisPrefix: utils.redisPrefix,
+    redisPrefix: utils.redisPrefix
   })
   utils.prevClients.push(server)
   return server
@@ -76,7 +76,7 @@ const createTestCase = async (tc) => {
   const server = await createServer()
   const [apiClient, worker] = await promise.all([
     createApiClient(),
-    createWorker(),
+    createWorker()
   ])
   return {
     redisClient,
@@ -84,7 +84,7 @@ const createTestCase = async (tc) => {
     server,
     worker,
     createWsClient: /** @param {string} room */ (room) =>
-      createWsClient(tc, room),
+      createWsClient(tc, room)
   }
 }
 

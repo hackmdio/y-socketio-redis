@@ -3,7 +3,7 @@ export class User {
    * @param {string} room
    * @param {string} userid identifies the user globally.
    */
-  constructor(room, userid) {
+  constructor (room, userid) {
     this.room = room
     /**
      * @type {string}

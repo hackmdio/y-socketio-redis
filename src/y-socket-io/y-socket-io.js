@@ -1,4 +1,3 @@
-import { Namespace, Server, Socket } from 'socket.io'
 import * as Y from 'yjs'
 import * as AwarenessProtocol from 'y-protocols/awareness'
 import * as promise from 'lib0/promise'
@@ -7,7 +6,15 @@ import { assert } from 'lib0/testing.js'
 import { User } from './user.js'
 import * as api from '../api.js'
 import * as protocol from '../protocol.js'
-import { Subscriber, createSubscriber } from '../subscriber.js'
+import { createSubscriber } from '../subscriber.js'
+
+/**
+ * @typedef {import('socket.io').Namespace} Namespace
+ * @typedef {import('socket.io').Socket} Socket
+ * @typedef {import('socket.io').Server} Server
+ *
+ * @typedef {import('../subscriber.js').Subscriber} Subscriber
+ */
 
 /**
  * @typedef UserLike
@@ -88,7 +95,7 @@ export class YSocketIO {
    * @param {Server} io Server instance from Socket IO
    * @param {YSocketIOConfiguration} configuration The YSocketIO configuration
    */
-  constructor(io, configuration) {
+  constructor (io, configuration) {
     this.io = io
     this.configuration = configuration
   }
@@ -104,10 +111,10 @@ export class YSocketIO {
    * @param {{ redisPrefix?: string }=} redisPrefix
    * @public
    */
-  async initialize(store, { redisPrefix = 'y' } = {}) {
+  async initialize (store, { redisPrefix = 'y' } = {}) {
     const [client, subscriber] = await promise.all([
       api.createApiClient(store, redisPrefix),
-      createSubscriber(store, redisPrefix),
+      createSubscriber(store, redisPrefix)
     ])
     this.client = client
     this.subscriber = subscriber
@@ -333,7 +340,7 @@ export class YSocketIO {
   /**
    * @param {Namespace} namespace
    */
-  getNamespaceString(namespace) {
+  getNamespaceString (namespace) {
     return namespace.name.replace(/\/yjs\|/, '')
   }
 
@@ -341,7 +348,7 @@ export class YSocketIO {
    * @param {Uint8Array | ArrayBuffer | Buffer} message
    * @returns {{ type: EventType, message: Uint8Array }}
    */
-  fromRedis(message) {
+  fromRedis (message) {
     const msg = new Uint8Array(message)
     switch (msg[0]) {
       case protocol.messageSync: {
@@ -349,17 +356,17 @@ export class YSocketIO {
           case protocol.messageSyncStep1:
             return {
               type: 'sync-step-1',
-              message: msg.slice(3, msg.length),
+              message: msg.slice(3, msg.length)
             }
           case protocol.messageSyncStep2:
             return {
               type: 'sync-step-2',
-              message: msg.slice(3, msg.length),
+              message: msg.slice(3, msg.length)
             }
           case protocol.messageSyncUpdate:
             return {
               type: 'sync-update',
-              message: msg.slice(3, msg.length),
+              message: msg.slice(3, msg.length)
             }
         }
         break
@@ -367,7 +374,7 @@ export class YSocketIO {
       case protocol.messageAwareness: {
         return {
           type: 'awareness-update',
-          message: msg.slice(2, msg.length),
+          message: msg.slice(2, msg.length)
         }
       }
     }
@@ -378,7 +385,7 @@ export class YSocketIO {
    * @param {EventType} type
    * @param {Uint8Array | ArrayBuffer | Buffer} message
    */
-  toRedis(type, message) {
+  toRedis (type, message) {
     return encoding.encode((encoder) => {
       switch (type) {
         case 'sync-step-1':

@@ -1,9 +1,4 @@
-import * as api from './api.js'
-import * as logging from 'lib0/logging'
 import { YSocketIO } from './y-socket-io/y-socket-io.js'
-import { randomUUID } from 'crypto'
-
-const log = logging.createModuleLogger('@y/redis/ws')
 
 /**
  * how to sync
@@ -20,16 +15,16 @@ const log = logging.createModuleLogger('@y/redis/ws')
 class YSocketIOServer {
   /**
    * @param {YSocketIO} app
-   * @param {api.Api} client
+   * @param {import('./api.js').Api} client
    * @param {import('./subscriber.js').Subscriber} subscriber
    */
-  constructor(app, client, subscriber) {
+  constructor (app, client, subscriber) {
     this.app = app
     this.subscriber = subscriber
     this.client = client
   }
 
-  async destroy() {
+  async destroy () {
     this.subscriber.destroy()
     await this.client.destroy()
   }
