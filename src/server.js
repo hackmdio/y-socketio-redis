@@ -10,6 +10,9 @@ import * as promise from 'lib0/promise'
 import { Server } from 'socket.io'
 import { registerYSocketIOServer } from './socketio.js'
 import http from 'http'
+import { randomUUID } from 'crypto'
+
+const skipAuth = env.getConf('no-auth') === 'true'
 
 const wsServerPublicKey = await ecdsa.importKeyJwk(
   json.parse(env.ensureConf('auth-public-key'))
@@ -117,6 +120,7 @@ export const createYSocketIOServer = async ({
   const server = await registerYSocketIOServer(io, store, {
     redisPrefix,
     authenticate: async (socket) => {
+      if (skipAuth) return { userid: randomUUID().toString() }
       const token = socket.handshake.query.yauth
       if (!token) return null
       // verify that the user has a valid token
