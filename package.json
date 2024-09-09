@@ -58,7 +58,7 @@
     "socket.io": "^4.7.5",
     "uws": "github:uNetworking/uWebSockets.js#v20.40.0",
     "y-protocols": "^1.0.6",
-    "yjs": "^13.5.6"
+    "yjs": "^13.6.18"
   },
   "optionalDependencies": {
     "minio": "^7.1.3",
