@@ -12,9 +12,9 @@ const authPublicKey = env.getConf('auth-public-key')
 /** @type {CryptoKey | null} */
 let wsServerPublicKey = null
 if (authPublicKey) {
-  wsServerPublicKey = await ecdsa.importKeyJwk(
-    json.parse(env.ensureConf('auth-public-key'))
-  )
+  ecdsa
+    .importKeyJwk(json.parse(env.ensureConf('auth-public-key')))
+    .then((key) => { wsServerPublicKey = key })
 }
 
 /**

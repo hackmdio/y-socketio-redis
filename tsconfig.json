@@ -5,21 +5,12 @@
     "lib": ["es2022", "dom"],
     "allowJs": true,
     "checkJs": true,
-    "declaration": true,
-    "declarationMap": true,
-    "outDir": "./dist",
-    // "rootDir": "./src",
-    "composite": true,
     "strict": true,
     "noImplicitAny": true,
-    "emitDeclarationOnly": true,
+    "noEmit": true,
     "moduleResolution": "nodenext",
     "baseUrl": "./",
-    "paths": {
-    }
+    "paths": {}
   },
-  "exclude": [
-    "**/dist",
-    "./demos/"
-  ]
+  "exclude": ["**/dist", "./demos/"]
 }

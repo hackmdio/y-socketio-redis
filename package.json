@@ -13,7 +13,7 @@
     "minio": "docker run -p 9000:9000 -p 9001:9001 quay.io/minio/minio server /data --console-address \":9001\"",
     "redis": "docker run -p 6379:6379 redis",
     "test-db": "docker-compose -f ./docker-compose.test.yaml up",
-    "dist": "tsc",
+    "dist": "tsup",
     "lint": "standard && tsc",
     "test": "dotenvx run --env-file=.env -- node tests/index.js",
     "test-inspect": "dotenvx run --env-file=.env -- node --inspect-brk tests/index.js",
@@ -29,11 +29,12 @@
     "bin/*",
     "src/*"
   ],
+  "main": "./dist/index.js",
   "exports": {
     "./package.json": "./package.json",
     ".": {
-      "default": "./src/index.js",
-      "types": "./dist/src/index.d.ts"
+      "import": "./dist/index.js",
+      "default": "./dist/index.cjs"
     }
   },
   "repository": {
@@ -75,6 +76,7 @@
     "concurrently": "^8.2.2",
     "socket.io-client": "^4.7.5",
     "standard": "^17.1.0",
+    "tsup": "^8.2.4",
     "typescript": "^5.3.3",
     "ws": "^8.16.0",
     "y-websocket": "^2.0.3"
