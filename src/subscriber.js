@@ -26,7 +26,6 @@ const run = async subscriber => {
       }
     } catch (e) {
       console.error(e)
-      process.exit(1)
     }
   }
 }
@@ -91,6 +90,7 @@ export class Subscriber {
   }
 
   destroy () {
+    this.subs.clear()
     this.client.destroy()
   }
 }
