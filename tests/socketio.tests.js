@@ -151,5 +151,8 @@ export const testSyncAndCleanup = async (tc) => {
   )
   // should delete old references
   t.assert(memRetrieved2?.references.length === 1)
-  await promise.all(utils.prevClients.reverse().map((c) => c.destroy()))
+  const clients = utils.prevClients.reverse()
+  for (const client of clients) {
+    try { await client.destroy() } catch (e) {}
+  }
 }

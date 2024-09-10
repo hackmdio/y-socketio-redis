@@ -6,17 +6,17 @@
   "type": "module",
   "scripts": {
     "dev": "concurrently -r 'npm run start:server' 'npm run start:worker' 'npm run minio'",
-    "start:server": "node --env-file .env ./bin/server.js",
-    "debug:server": "node --env-file .env --inspect-brk ./bin/worker.js ./bin/server.js",
-    "start:worker": "node --env-file .env ./bin/worker.js",
-    "debug:worker": "node --env-file .env --inspect-brk ./bin/worker.js",
+    "start:server": "dotenvx run --env-file=.env -- node ./bin/server.js",
+    "debug:server": "dotenvx run --env-file=.env -- node --inspect-brk ./bin/worker.js ./bin/server.js",
+    "start:worker": "dotenvx run --env-file=.env -- node ./bin/worker.js",
+    "debug:worker": "dotenvx run --env-file=.env -- node --inspect-brk ./bin/worker.js",
     "minio": "docker run -p 9000:9000 -p 9001:9001 quay.io/minio/minio server /data --console-address \":9001\"",
     "redis": "docker run -p 6379:6379 redis",
     "test-db": "docker-compose -f ./docker-compose.test.yaml up",
     "dist": "tsc",
     "lint": "standard && tsc",
-    "test": "node --env-file .env tests/index.js",
-    "test-inspect": "node --env-file .env --inspect-brk tests/index.js",
+    "test": "dotenvx run --env-file=.env -- node tests/index.js",
+    "test-inspect": "dotenvx run --env-file=.env -- node --inspect-brk tests/index.js",
     "preversion": "npm run lint && npm run dist",
     "clean": "rm -rf **/dist "
   },
@@ -56,7 +56,6 @@
     "lib0": "^0.2.93",
     "redis": "^4.6.12",
     "socket.io": "^4.7.5",
-    "uws": "github:uNetworking/uWebSockets.js#v20.40.0",
     "y-protocols": "^1.0.6",
     "yjs": "^13.6.18"
   },
@@ -66,9 +65,10 @@
   },
   "engines": {
     "npm": ">=8.0.0",
-    "node": ">=20.0.0"
+    "node": ">=18.0.0"
   },
   "devDependencies": {
+    "@dotenvx/dotenvx": "^1.14.0",
     "@redis/client": "^1.6.0",
     "@types/node": "^20.11.5",
     "@types/ws": "^8.5.10",

@@ -413,4 +413,13 @@ export class YSocketIO {
       encoding.writeVarUint8Array(encoder, new Uint8Array(message))
     })
   }
+
+  destroy () {
+    try {
+      this.subscriber?.destroy()
+      return this.client?.destroy()
+    } catch (e) {
+      console.error(e)
+    }
+  }
 }

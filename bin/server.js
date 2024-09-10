@@ -8,8 +8,6 @@ const port = number.parseInt(env.getConf('port') || '3002')
 const redisPrefix = env.getConf('redis-prefix') || 'y'
 const postgresUrl = env.getConf('postgres')
 const s3Endpoint = env.getConf('s3-endpoint')
-const serverMode = env.getConf('server-mode')
-const checkPermCallbackUrl = env.ensureConf('AUTH_PERM_CALLBACK')
 
 let store
 if (s3Endpoint) {
@@ -31,8 +29,4 @@ if (s3Endpoint) {
   store = createMemoryStorage()
 }
 
-if (serverMode === 'socketio') {
-  server.createYSocketIOServer({ port, store, redisPrefix })
-} else {
-  server.createYWebsocketServer({ port, store, checkPermCallbackUrl, redisPrefix })
-}
+server.createYSocketIOServer({ port, store, redisPrefix })
