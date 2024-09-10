@@ -1,6 +1,6 @@
 {
   "name": "@hackmd/y-socketio-redis",
-  "version": "0.0.1",
+  "version": "0.0.2",
   "description": "Scalable Socket.IO provider for Yjs using redis",
   "sideEffects": false,
   "type": "module",
