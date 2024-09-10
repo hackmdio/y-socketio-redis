@@ -16,7 +16,7 @@ import * as time from 'lib0/time'
 const logWorker = logging.createModuleLogger('@y/redis/api/worker')
 // const logApi = logging.createModuleLogger('@y/redis/api')
 
-export const redisUrl = env.ensureConf('redis')
+export const redisUrl = env.ensureConf('ysr-redis')
 
 let ydocUpdateCallback = env.getConf('ydoc-update-callback')
 if (ydocUpdateCallback != null && ydocUpdateCallback.slice(-1) !== '/') {

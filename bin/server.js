@@ -5,7 +5,7 @@ import * as env from 'lib0/environment'
 import * as server from '../src/index.js'
 
 const port = number.parseInt(env.getConf('port') || '3002')
-const redisPrefix = env.getConf('redis-prefix') || 'y'
+const redisPrefix = env.getConf('ysr-redis-prefix') || 'y'
 const postgresUrl = env.getConf('postgres')
 const s3Endpoint = env.getConf('s3-endpoint')
 

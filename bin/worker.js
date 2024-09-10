@@ -3,7 +3,7 @@
 import * as env from 'lib0/environment'
 import * as api from '../src/api.js'
 
-const redisPrefix = env.getConf('redis-prefix') || 'y'
+const redisPrefix = env.getConf('ysr-redis-prefix') || 'y'
 const postgresUrl = env.getConf('postgres')
 const s3Endpoint = env.getConf('s3-endpoint')
 
