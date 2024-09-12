@@ -20,7 +20,7 @@ const createTestCase = async tc => {
   const keysToDelete = await redisClient.keys(redisPrefix + ':*')
   keysToDelete.length > 0 && await redisClient.del(keysToDelete)
   await redisClient.quit()
-  const client = await api.createApiClient(store, redisPrefix)
+  const client = await api.createApiClient(store, { redisPrefix })
   prevClients.push(client)
   const room = tc.testName
   const docid = 'main'
@@ -44,7 +44,7 @@ const createTestCase = async tc => {
 }
 
 const createWorker = async () => {
-  const worker = await api.createWorker(store, redisPrefix)
+  const worker = await api.createWorker(store, { redisPrefix })
   worker.client.redisMinMessageLifetime = 200
   worker.client.redisWorkerTimeout = 50
   prevClients.push(worker.client)

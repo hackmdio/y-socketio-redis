@@ -34,7 +34,10 @@ const createWsClient = (tc, room) => {
 }
 
 const createWorker = async () => {
-  const worker = await api.createWorker(utils.store, utils.redisPrefix)
+  const worker = await api.createWorker(
+    utils.store,
+    { redisPrefix: utils.redisPrefix }
+  )
   worker.client.redisMinMessageLifetime = 500
   worker.client.redisWorkerTimeout = 100
   utils.prevClients.push(worker.client)
@@ -52,7 +55,7 @@ const createServer = async () => {
 }
 
 const createApiClient = async () => {
-  const client = await api.createApiClient(utils.store, utils.redisPrefix)
+  const client = await api.createApiClient(utils.store, { redisPrefix: utils.redisPrefix })
   utils.prevClients.push(client)
   return client
 }

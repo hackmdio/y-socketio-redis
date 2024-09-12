@@ -86,10 +86,10 @@ const decodeRedisRoomStreamName = (rediskey, expectedPrefix) => {
 
 /**
  * @param {import('./storage.js').AbstractStorage} store
- * @param {string} redisPrefix
+ * @param {{ redisPrefix?: string, redisUrl?: string }} opts
  */
-export const createApiClient = async (store, redisPrefix) => {
-  const a = new Api(store, redisPrefix)
+export const createApiClient = async (store, { redisPrefix, redisUrl }) => {
+  const a = new Api(store, redisPrefix, redisUrl)
   await a.redis.connect()
   try {
     await a.redis.xGroupCreate(a.redisWorkerStreamName, a.redisWorkerGroupName, '0', { MKSTREAM: true })
@@ -100,9 +100,10 @@ export const createApiClient = async (store, redisPrefix) => {
 export class Api {
   /**
    * @param {import('./storage.js').AbstractStorage} store
-   * @param {string} prefix
+   * @param {string=} prefix
+   * @param {string=} url
    */
-  constructor (store, prefix) {
+  constructor (store, prefix = 'y', url = redisUrl) {
     this.store = store
     this.prefix = prefix
     this.consumername = random.uuidv4()
@@ -119,7 +120,7 @@ export class Api {
     this.redisWorkerGroupName = this.prefix + ':worker'
     this._destroyed = false
     this.redis = redis.createClient({
-      url: redisUrl,
+      url,
       // scripting: https://github.com/redis/node-redis/#lua-scripts
       scripts: {
         addMessage: redis.defineScript({
@@ -333,10 +334,10 @@ export class Api {
 
 /**
  * @param {import('./storage.js').AbstractStorage} store
- * @param {string} redisPrefix
+ * @param {{ redisPrefix?: string, redisUrl?: string }} opts
  */
-export const createWorker = async (store, redisPrefix) => {
-  const a = await createApiClient(store, redisPrefix)
+export const createWorker = async (store, opts) => {
+  const a = await createApiClient(store, opts)
   return new Worker(a)
 }
 

@@ -109,13 +109,13 @@ export class YSocketIO {
    *
    *  It also starts socket connection listeners.
    * @param {import('../storage.js').AbstractStorage} store
-   * @param {{ redisPrefix?: string }=} redisPrefix
+   * @param {{ redisPrefix?: string, redisUrl?: string }=} opts
    * @public
    */
-  async initialize (store, { redisPrefix = 'y' } = {}) {
+  async initialize (store, { redisUrl, redisPrefix = 'y' } = {}) {
     const [client, subscriber] = await promise.all([
-      api.createApiClient(store, redisPrefix),
-      createSubscriber(store, redisPrefix)
+      api.createApiClient(store, { redisUrl, redisPrefix }),
+      createSubscriber(store, { redisUrl, redisPrefix })
     ])
     this.client = client
     this.subscriber = subscriber

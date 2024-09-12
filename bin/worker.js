@@ -27,4 +27,4 @@ if (s3Endpoint) {
   store = createMemoryStorage()
 }
 
-api.createWorker(store, redisPrefix)
+api.createWorker(store, { redisPrefix })
