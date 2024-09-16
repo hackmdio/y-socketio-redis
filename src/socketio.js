@@ -35,10 +35,11 @@ class YSocketIOServer {
  * @param {import('./storage.js').AbstractStorage} store
  * @param {Object} conf
  * @param {string} [conf.redisPrefix]
+ * @param {string} [conf.redisUrl]
  * @param {import('./y-socket-io/y-socket-io.js').YSocketIOConfiguration['authenticate']} conf.authenticate
  */
-export const registerYSocketIOServer = async (io, store, conf) => {
-  const app = new YSocketIO(io, { authenticate: conf.authenticate })
-  const { client, subscriber } = await app.initialize(store, conf)
+export const registerYSocketIOServer = async (io, store, { authenticate, redisUrl, redisPrefix }) => {
+  const app = new YSocketIO(io, { authenticate })
+  const { client, subscriber } = await app.initialize(store, { redisUrl, redisPrefix })
   return new YSocketIOServer(app, client, subscriber)
 }

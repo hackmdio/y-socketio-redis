@@ -16,8 +16,6 @@ import * as time from 'lib0/time'
 const logWorker = logging.createModuleLogger('@y/redis/api/worker')
 // const logApi = logging.createModuleLogger('@y/redis/api')
 
-export const redisUrl = env.ensureConf('ysr-redis')
-
 let ydocUpdateCallback = env.getConf('ydoc-update-callback')
 if (ydocUpdateCallback != null && ydocUpdateCallback.slice(-1) !== '/') {
   ydocUpdateCallback += '/'
@@ -103,7 +101,7 @@ export class Api {
    * @param {string=} prefix
    * @param {string=} url
    */
-  constructor (store, prefix = 'y', url = redisUrl) {
+  constructor (store, prefix = 'y', url) {
     this.store = store
     this.prefix = prefix
     this.consumername = random.uuidv4()
@@ -120,7 +118,7 @@ export class Api {
     this.redisWorkerGroupName = this.prefix + ':worker'
     this._destroyed = false
     this.redis = redis.createClient({
-      url,
+      url: url || env.ensureConf('ysr-redis'),
       // scripting: https://github.com/redis/node-redis/#lua-scripts
       scripts: {
         addMessage: redis.defineScript({
