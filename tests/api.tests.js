@@ -3,6 +3,7 @@ import * as t from 'lib0/testing'
 import * as api from '../src/api.js'
 import * as encoding from 'lib0/encoding'
 import * as promise from 'lib0/promise'
+import * as env from 'lib0/environment'
 import * as redis from 'redis'
 import { prevClients, store } from './utils.js'
 
@@ -14,7 +15,7 @@ const redisPrefix = 'ytests'
 const createTestCase = async tc => {
   await promise.all(prevClients.map(c => c.destroy()))
   prevClients.length = 0
-  const redisClient = redis.createClient({ url: api.redisUrl })
+  const redisClient = redis.createClient({ url: env.ensureConf('ysr-redis') })
   await redisClient.connect()
   // flush existing content
   const keysToDelete = await redisClient.keys(redisPrefix + ':*')
