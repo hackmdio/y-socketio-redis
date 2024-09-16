@@ -101,7 +101,7 @@ export class Api {
    * @param {string=} prefix
    * @param {string=} url
    */
-  constructor (store, prefix = 'y', url) {
+  constructor (store, prefix = 'y', url = env.ensureConf('ysr-redis')) {
     this.store = store
     this.prefix = prefix
     this.consumername = random.uuidv4()
@@ -118,7 +118,7 @@ export class Api {
     this.redisWorkerGroupName = this.prefix + ':worker'
     this._destroyed = false
     this.redis = redis.createClient({
-      url: url || env.ensureConf('ysr-redis'),
+      url,
       // scripting: https://github.com/redis/node-redis/#lua-scripts
       scripts: {
         addMessage: redis.defineScript({
