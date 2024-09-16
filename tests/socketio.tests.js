@@ -7,6 +7,7 @@ import * as array from 'lib0/array'
 import * as redis from 'redis'
 import * as time from 'lib0/time'
 import * as jwt from 'lib0/crypto/jwt'
+import * as env from 'lib0/environment'
 import * as utils from './utils.js'
 import { SocketIOProvider } from '../src/y-socket-io/client.js'
 
@@ -66,7 +67,7 @@ const createApiClient = async () => {
 const createTestCase = async (tc) => {
   await promise.all(utils.prevClients.map((c) => c.destroy()))
   utils.prevClients.length = 0
-  const redisClient = redis.createClient({ url: api.redisUrl })
+  const redisClient = redis.createClient({ url: env.ensureConf('ysr-redis') })
   await redisClient.connect()
   // flush existing content
   const keysToDelete = await redisClient.keys(utils.redisPrefix + ':*')
