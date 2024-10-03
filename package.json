@@ -57,6 +57,7 @@
     "lib0": "^0.2.93",
     "redis": "^4.6.12",
     "socket.io": "^4.7.5",
+    "socket.io-client": "^4.8.0",
     "y-protocols": "^1.0.6",
     "yjs": "^13.6.18"
   },
@@ -65,20 +66,17 @@
     "postgres": "^3.4.3"
   },
   "engines": {
-    "npm": ">=8.0.0",
     "node": ">=18.0.0"
   },
+  "packageManager": "pnpm@9.1.0",
   "devDependencies": {
     "@dotenvx/dotenvx": "^1.14.0",
     "@redis/client": "^1.6.0",
     "@types/node": "^20.11.5",
     "@types/ws": "^8.5.10",
     "concurrently": "^8.2.2",
-    "socket.io-client": "^4.7.5",
     "standard": "^17.1.0",
     "tsup": "^8.2.4",
-    "typescript": "^5.3.3",
-    "ws": "^8.16.0",
-    "y-websocket": "^2.0.3"
+    "typescript": "^5.3.3"
   }
 }
