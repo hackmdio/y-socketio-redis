@@ -10,7 +10,8 @@
     "noEmit": true,
     "moduleResolution": "nodenext",
     "baseUrl": "./",
-    "paths": {}
+    "paths": {},
+    "skipLibCheck": true
   },
-  "exclude": ["**/dist", "./demos/"]
+  "exclude": ["**/dist", "./demos/", "node_modules"]
 }
