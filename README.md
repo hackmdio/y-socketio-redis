@@ -1,24 +1,46 @@
 > This is a fork of [y-redis@be833ff](https://github.com/yjs/y-redis/tree/be833ff1ccea630fbc45097cc3d122cc8a690733) with [y-socket.io](https://github.com/ivan-topp/y-socket.io) connection layer
 
+## Installation
+
+```sh
+npm install @hackmd/y-socketio-redis
+```
+
+## Usage
+
+Server side:
+
+```js
+import { createYSocketIOServer, createWorker } from '@hackmd/y-socketio-redis'
+```
+
+Client side:
+
+```js
+import { SocketIOProvider } from '@hackmd/y-socketio-redis/client'
+```
+
 ---
 
-# y-redis :tophat: 
+# y-redis :tophat:
+
 > y-websocket compatible backend using Redis for scalability. **This is beta
 > software!**
 
 y-redis is an alternative backend for y-websocket. It only requires a redis
-instance and a storage provider (S3 or Postgres-compatible). 
+instance and a storage provider (S3 or Postgres-compatible).
 
-* **Memory efficient:** The server doesn't maintain a Y.Doc in-memory. It
-streams updates through redis. The Yjs document is only loaded to memory for the
-initial sync. 
-* **Scalable:** You can start as many y-redis instances as you want to handle
-a fluctuating number of clients. No coordination is needed.
-- **Auth:** y-redis works together with your existing infrastructure to
-authenticate clients and check whether a client has read-only / read-write
-access to a document.
-- **Database agnostic:** You can persist documents in S3-compatible backends, in
-Postgres, or implement your own storage provider.
+- **Memory efficient:** The server doesn't maintain a Y.Doc in-memory. It
+  streams updates through redis. The Yjs document is only loaded to memory for the
+  initial sync.
+- **Scalable:** You can start as many y-redis instances as you want to handle
+  a fluctuating number of clients. No coordination is needed.
+
+* **Auth:** y-redis works together with your existing infrastructure to
+  authenticate clients and check whether a client has read-only / read-write
+  access to a document.
+* **Database agnostic:** You can persist documents in S3-compatible backends, in
+  Postgres, or implement your own storage provider.
 
 ### Components
 
@@ -40,7 +62,7 @@ stored redis and in the persistent storage (e.g. S3 or Postgres) for the initial
 sync. After the initial sync, the server doesn't keep any Yjs state in-memory.
 You can start as many server components as you need. It makes sense to put the
 server component behind a loadbalancer, which can potentially auto-scale the
-server component based on CPU or network usage. 
+server component based on CPU or network usage.
 
 The separate y-redis **worker component** (`/bin/worker.js`) is responsible for
 extracting data from the redis cache to a persistent database like S3 or
@@ -153,7 +175,7 @@ docker run -p 6379:6379 redis
 
 Setup an S3-compatible store at your favorite cloud provider.
 
-Alternatively, simply run a *minio* store as a docker container:
+Alternatively, simply run a _minio_ store as a docker container:
 
 ```sh
 docker run -p 9000:9000 -p 9001:9001 quay.io/minio/minio server /data --console-address \":9001\"
