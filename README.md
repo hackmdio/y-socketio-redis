@@ -8,16 +8,16 @@ npm install @hackmd/y-socketio-redis
 
 ## Usage
 
-Server side:
+Server-side:
 
 ```js
 import { createYSocketIOServer, createWorker } from '@hackmd/y-socketio-redis'
 ```
 
-Client side:
+Client-side:
 
 ```js
-import { SocketIOProvider } from '@hackmd/y-socketio-redis/client'
+import { SocketIOProvider } from '@hackmd/y-socketio-redis/dist/client'
 ```
 
 ---
