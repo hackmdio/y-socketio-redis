@@ -153,6 +153,10 @@ export class YSocketIO {
       this.namespaceStreamMap.set(namespace, stream)
       this.streamNamespaceMap.set(stream, namespace)
 
+      this.initSyncListeners(socket)
+      this.initAwarenessListeners(socket)
+      this.initSocketListeners(socket)
+
       const doc = await this.client.getDoc(namespace, 'index')
 
       if (
@@ -162,12 +166,6 @@ export class YSocketIO {
         // need to renew subscription id and make sure that we catch the latest content.
         this.subscriber.ensureSubId(stream, doc.redisLastId)
       }
-
-      this.initSyncListeners(socket)
-      this.initAwarenessListeners(socket)
-
-      this.initSocketListeners(socket)
-
       this.startSynchronization(socket, doc)
     })
 
