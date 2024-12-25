@@ -342,8 +342,12 @@ export const createWorker = async (store, opts) => {
 export class Worker {
   /**
    * @param {Api} client
+   * @param {Object} opts
+   * @param {number} [opts.blockTime]
+   * @param {number} [opts.tryReclaimCount]
+   * @param {number} [opts.tryClaimCount]
    */
-  constructor (client) {
+  constructor (client, opts = {}) {
     this.client = client
     logWorker('Created worker process ', { id: client.consumername, prefix: client.prefix, minMessageLifetime: client.redisMinMessageLifetime })
     ;(async () => {
@@ -351,7 +355,7 @@ export class Worker {
       const timeDiff = startRedisTime.getTime() - time.getUnixTime()
       while (!client._destroyed) {
         try {
-          const tasks = await client.consumeWorkerQueue()
+          const tasks = await client.consumeWorkerQueue(opts)
           if (tasks.length === 0 || (client.redisMinMessageLifetime > time.getUnixTime() + timeDiff - number.parseInt(tasks[0].id.split('-')[0]))) {
             await promise.wait(client.redisMinMessageLifetime / 2)
           }
