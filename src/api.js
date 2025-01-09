@@ -357,7 +357,7 @@ export class Worker {
         try {
           const tasks = await client.consumeWorkerQueue(opts)
           if (tasks.length === 0 || (client.redisMinMessageLifetime > time.getUnixTime() + timeDiff - number.parseInt(tasks[0].id.split('-')[0]))) {
-            await promise.wait(client.redisWorkerTimeout);
+            await promise.wait(client.redisWorkerTimeout)
           }
         } catch (e) {
           console.error(e)
