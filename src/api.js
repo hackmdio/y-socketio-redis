@@ -109,7 +109,7 @@ export class Api {
      * After this timeout, a new worker will pick up the task
      * @todo rename this variable
      */
-    this.redisWorkerTimeout = number.parseInt(env.getConf('redis-task-timeout') || '600000')
+    this.redisWorkerTimeout = number.parseInt(env.getConf('redis-task-timeout') || '1000')
     /**
      * Minimum lifetime of y* update messages in redis streams.
      */
@@ -357,7 +357,7 @@ export class Worker {
         try {
           const tasks = await client.consumeWorkerQueue(opts)
           if (tasks.length === 0 || (client.redisMinMessageLifetime > time.getUnixTime() + timeDiff - number.parseInt(tasks[0].id.split('-')[0]))) {
-            await promise.wait(client.redisMinMessageLifetime / 2)
+            await promise.wait(client.redisWorkerTimeout)
           }
         } catch (e) {
           console.error(e)
