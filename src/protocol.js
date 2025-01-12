@@ -83,6 +83,8 @@ export const mergeMessages = messages => {
       )
     )
   }))
+  // release awareness after use to avoid memory leak
+  aw.destroy()
   return result
 }
 
