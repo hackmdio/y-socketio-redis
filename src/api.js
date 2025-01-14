@@ -317,6 +317,8 @@ export class Api {
         } catch (e) {
           console.error(e)
         }
+        // destroy ydoc after persisting
+        ydoc.destroy()
       }
     }))
     return tasks
