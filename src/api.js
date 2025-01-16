@@ -354,12 +354,17 @@ export class Worker {
     this.client = client
     logWorker('Created worker process ', { id: client.consumername, prefix: client.prefix, minMessageLifetime: client.redisMinMessageLifetime })
     ;(async () => {
+      let prev = performance.now()
       while (!client._destroyed) {
         try {
           const { reclaimCounts } = await client.consumeWorkerQueue(opts)
+          const now = performance.now()
           if (reclaimCounts === 0) {
             await promise.wait(client.redisWorkerTimeout)
+          } else if (now - prev < client.redisWorkerTimeout) {
+            await promise.wait(client.redisWorkerTimeout - (now - prev))
           }
+          prev = now
         } catch (e) {
           console.error(e)
         }
