@@ -280,6 +280,7 @@ export class Api {
       })
     }
     tasks.length > 0 && logWorker('Accepted tasks ', { tasks })
+    let reclaimCounts = 0
     await promise.all(tasks.map(async task => {
       const streamlen = await this.redis.xLen(task.stream)
       if (streamlen === 0) {
@@ -289,6 +290,7 @@ export class Api {
           .exec()
         logWorker('Stream still empty, removing recurring task from queue ', { stream: task.stream })
       } else {
+        reclaimCounts++
         const { room, docid } = decodeRedisRoomStreamName(task.stream, this.prefix)
         const { ydoc, storeReferences, redisLastId } = await this.getDoc(room, docid)
         const lastId = math.max(number.parseInt(redisLastId.split('-')[0]), number.parseInt(task.id.split('-')[0]))
@@ -321,7 +323,7 @@ export class Api {
         ydoc.destroy()
       }
     }))
-    return tasks
+    return { tasks, reclaimCounts }
   }
 
   async destroy () {
@@ -353,12 +355,10 @@ export class Worker {
     this.client = client
     logWorker('Created worker process ', { id: client.consumername, prefix: client.prefix, minMessageLifetime: client.redisMinMessageLifetime })
     ;(async () => {
-      const startRedisTime = await client.redis.time()
-      const timeDiff = startRedisTime.getTime() - time.getUnixTime()
       while (!client._destroyed) {
         try {
-          const tasks = await client.consumeWorkerQueue(opts)
-          if (tasks.length === 0 || (client.redisMinMessageLifetime > time.getUnixTime() + timeDiff - number.parseInt(tasks[0].id.split('-')[0]))) {
+          const { reclaimCounts } = await client.consumeWorkerQueue(opts)
+          if (reclaimCounts === 0) {
             await promise.wait(client.redisWorkerTimeout)
           }
         } catch (e) {
