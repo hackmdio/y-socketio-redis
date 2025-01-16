@@ -11,7 +11,6 @@ import * as math from 'lib0/math'
 import * as protocol from './protocol.js'
 import * as env from 'lib0/environment'
 import * as logging from 'lib0/logging'
-import * as time from 'lib0/time'
 
 const logWorker = logging.createModuleLogger('@y/redis/api/worker')
 // const logApi = logging.createModuleLogger('@y/redis/api')
