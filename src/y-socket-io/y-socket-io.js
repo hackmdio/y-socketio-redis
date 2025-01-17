@@ -171,6 +171,7 @@ export class YSocketIO {
         this.client.getDoc(namespace, 'index').then((doc) => {
           assert(socket.user)
           assert(this.subscriber)
+          socket.emit('ready-for-sync')
           if (
             api.isSmallerRedisId(doc.redisLastId, socket.user.initialRedisSubId)
           ) {
