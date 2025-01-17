@@ -141,6 +141,7 @@ export class SocketIOProvider extends Observable {
     this.roomName = roomName
     this.doc = doc
     this.awareness = awareness
+    this.released = false
 
     this._broadcastChannel = `${url}/${roomName}`
     this.disableBc = disableBc
@@ -318,17 +319,20 @@ export class SocketIOProvider extends Observable {
         ])
       )
     }
+    const timeout = () => {
+      if (this.released) return
+      if (this.socket.disconnected) return
+      this.socket.emit(
+        'sync-step-1',
+        Y.encodeStateVector(this.doc),
+        (/** @type {Uint8Array} */ update) => {
+          Y.applyUpdate(this.doc, new Uint8Array(update), this)
+        }
+      )
+      setTimeout(timeout, resyncInterval)
+    }
     if (resyncInterval > 0) {
-      this.resyncInterval = setInterval(() => {
-        if (this.socket.disconnected) return
-        this.socket.emit(
-          'sync-step-1',
-          Y.encodeStateVector(this.doc),
-          (/** @type {Uint8Array} */ update) => {
-            Y.applyUpdate(this.doc, new Uint8Array(update), this)
-          }
-        )
-      }, resyncInterval)
+      setTimeout(timeout, resyncInterval)
     }
   }
 
@@ -377,7 +381,7 @@ export class SocketIOProvider extends Observable {
    * @type {() => void}
    */
   destroy () {
-    if (this.resyncInterval != null) clearInterval(this.resyncInterval)
+    this.released = true
     this.disconnect()
     if (typeof window !== 'undefined') { window.removeEventListener('beforeunload', this.beforeUnloadHandler) } else if (typeof process !== 'undefined') { process.off('exit', this.beforeUnloadHandler) }
     this.awareness.off('update', this.awarenessUpdate)
