@@ -13,7 +13,7 @@ import * as env from 'lib0/environment'
 import * as logging from 'lib0/logging'
 
 const logWorker = logging.createModuleLogger('@y/redis/api/worker')
-// const logApi = logging.createModuleLogger('@y/redis/api')
+const logApi = logging.createModuleLogger('@y/redis/api')
 
 let ydocUpdateCallback = env.getConf('ydoc-update-callback')
 if (ydocUpdateCallback != null && ydocUpdateCallback.slice(-1) !== '/') {
@@ -226,10 +226,12 @@ export class Api {
   async getDoc (room, docid) {
     const ms = extractMessagesFromStreamReply(await this.redis.xRead(redis.commandOptions({ returnBuffers: true }), { key: computeRedisRoomStreamName(room, docid, this.prefix), id: '0' }), this.prefix)
     const docMessages = ms.get(room)?.get(docid) || null
+    if (docMessages?.messages) logApi(`processing messages of length: ${docMessages?.messages.length} in room: ${room}`)
     const docstate = await this.store.retrieveDoc(room, docid)
     const ydoc = new Y.Doc()
     const awareness = new awarenessProtocol.Awareness(ydoc)
     awareness.setLocalState(null) // we don't want to propagate awareness state
+    const now = performance.now()
     ydoc.transact(() => {
       if (docstate) { Y.applyUpdateV2(ydoc, docstate.doc) }
       docMessages?.messages.forEach(m => {
@@ -248,6 +250,7 @@ export class Api {
         }
       })
     })
+    logApi(`took ${performance.now() - now}ms to process messages for room: ${room}`)
     return { ydoc, awareness, redisLastId: docMessages?.lastId.toString() || '0', storeReferences: docstate?.references || null }
   }
 
