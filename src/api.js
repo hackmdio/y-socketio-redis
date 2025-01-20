@@ -252,7 +252,7 @@ export class Api {
    */
   async checkAndRecoveryWorkerStream (room, docid) {
     await this.redis.checkAndRecoverWorkerStream(
-      computeRedisRoomStreamName(room, docid, this.prefix),
+      computeRedisRoomStreamName(room, docid, this.prefix)
     )
   }
 

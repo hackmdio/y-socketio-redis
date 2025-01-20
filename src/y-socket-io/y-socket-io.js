@@ -159,7 +159,7 @@ export class YSocketIO {
 
       await this.client.checkAndRecoveryWorkerStream(
         this.getNamespaceString(socket.nsp),
-        'index',
+        'index'
       )
       const doc = await this.client.getDoc(namespace, 'index')
 
