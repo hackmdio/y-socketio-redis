@@ -120,6 +120,41 @@ export class Api {
       url,
       // scripting: https://github.com/redis/node-redis/#lua-scripts
       scripts: {
+        checkAndRecoverWorkerStream: redis.defineScript({
+          NUMBER_OF_KEYS: 1,
+          SCRIPT: `
+            local found = false
+            local messages = redis.call("XREAD", "COUNT", 0, "STREAMS", "${this.redisWorkerStreamName}", "0-0")
+
+            if messages and #messages > 0 then
+              local entries = messages[1][2]
+              for _, entry in ipairs(entries) do
+                -- Each entry is an array where entry[2] is the message fields
+                if entry[2][2] == KEYS[1] then
+                  found = true
+                  break
+                end
+              end
+            end
+
+            -- If stream not found in y:worker and the stream exists, add it
+            if not found and redis.call("TYPE", KEYS[1]).ok == "stream" then
+              redis.call("XADD", "${this.redisWorkerStreamName}", "*", "compact", KEYS[1])
+            end
+          `,
+          /**
+           * @param {string} key
+           */
+          transformArguments (key) {
+            return [key]
+          },
+          /**
+           * @param {null} x
+           */
+          transformReply (x) {
+            return x
+          }
+        }),
         addMessage: redis.defineScript({
           NUMBER_OF_KEYS: 1,
           SCRIPT: `
@@ -209,6 +244,16 @@ export class Api {
       m[1] = protocol.messageSyncUpdate
     }
     return this.redis.addMessage(computeRedisRoomStreamName(room, docid, this.prefix), m)
+  }
+
+  /**
+   * @param {string} room
+   * @param {string} docid
+   */
+  async checkAndRecoveryWorkerStream (room, docid) {
+    await this.redis.checkAndRecoverWorkerStream(
+      computeRedisRoomStreamName(room, docid, this.prefix)
+    )
   }
 
   /**
