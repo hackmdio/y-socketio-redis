@@ -75,6 +75,7 @@ export const testWorker = async tc => {
   let streamexists = true
   while (streamexists) {
     streamexists = (await client.redis.exists(stream)) === 1
+    await promise.wait(10)
   }
   const { ydoc: loadedDoc } = await client.getDoc(room, docid)
   t.assert(loadedDoc.getMap().get('key1') === 'val1')
