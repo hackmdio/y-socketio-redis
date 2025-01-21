@@ -285,7 +285,7 @@ export class Api {
       })
     }
     tasks.length > 0 && logWorker('Accepted tasks ', { tasks })
-    await this.redis.expire(this.workerSetName, 60 * 5)
+    if (this.redis.isOpen) await this.redis.expire(this.workerSetName, 60 * 5)
     let reclaimCounts = 0
     await promise.all(tasks.map(async task => {
       const streamlen = await this.redis.xLen(task.stream)
@@ -385,6 +385,7 @@ export class Worker {
   }
 
   async checkAndRecoverOrphanStreams () {
+    if (!this.client.redis.isOpen) return
     const rawConsumers = await this.client.redis.xInfoConsumers(
       this.client.redisWorkerStreamName,
       this.client.redisWorkerGroupName
