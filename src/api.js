@@ -354,7 +354,7 @@ export class Api {
           await this.store.persistDoc(room, docid, ydoc)
         } else logWorker(`skip persisting room: ${room} due to no changes`)
         await promise.all([
-          storeReferences ? this.store.deleteReferences(room, docid, storeReferences) : promise.resolve(),
+          storeReferences && changed ? this.store.deleteReferences(room, docid, storeReferences) : promise.resolve(),
           this.redis.multi()
             .xTrim(task.stream, 'MINID', lastId - this.redisMinMessageLifetime)
             .xAdd(this.redisWorkerStreamName, '*', { compact: task.stream })
