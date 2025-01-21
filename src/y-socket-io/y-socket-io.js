@@ -157,7 +157,6 @@ export class YSocketIO {
       this.initAwarenessListeners(socket)
       this.initSocketListeners(socket)
 
-      await this.client.checkAndRecoveryWorkerStream(namespace, 'index')
       const doc = await this.client.getDoc(namespace, 'index')
 
       if (
@@ -216,7 +215,7 @@ export class YSocketIO {
         this.getNamespaceString(socket.nsp),
         'index',
         Buffer.from(this.toRedis('sync-update', message))
-      )
+      ).catch(console.error)
     })
   }
 
@@ -240,7 +239,7 @@ export class YSocketIO {
         this.getNamespaceString(socket.nsp),
         'index',
         Buffer.from(this.toRedis('awareness-update', new Uint8Array(message)))
-      )
+      ).catch(console.error)
     })
   }
 
@@ -285,7 +284,7 @@ export class YSocketIO {
           this.getNamespaceString(socket.nsp),
           'index',
           Buffer.from(this.toRedis('sync-step-2', message))
-        )
+        ).catch(console.error)
       }
     )
     if (doc.awareness.states.size > 0) {
