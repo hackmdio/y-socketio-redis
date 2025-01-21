@@ -23,6 +23,9 @@ import { io } from 'socket.io-client'
  *  @prop {boolean=} autoConnect
  *  (Optional) This boolean specify if the provider should connect when the instance is created, by default is true
  *
+ *  @prop {boolean=} enableAwareness
+ *  (Optional) This boolean enable the awareness functionality, by default is true
+ *
  *  @prop {AwarenessProtocol.Awareness=} awareness
  *  (Optional) An existent awareness, by default is a new AwarenessProtocol.Awareness instance
  *
@@ -74,8 +77,13 @@ export class SocketIOProvider extends Observable {
    */
   doc
   /**
+   * Enable awareness
+   * @type {boolean}
+   */
+  enableAwareness
+  /**
    * The awareness
-   * @type {AwarenessProtocol.Awareness}
+   * @type {AwarenessProtocol.Awareness=}
    * @public
    */
   awareness
@@ -126,7 +134,8 @@ export class SocketIOProvider extends Observable {
     doc = new Y.Doc(),
     {
       autoConnect = true,
-      awareness = new AwarenessProtocol.Awareness(doc),
+      enableAwareness = true,
+      awareness = enableAwareness ? new AwarenessProtocol.Awareness(doc) : undefined,
       resyncInterval = -1,
       disableBc = false,
       auth = {}
@@ -140,6 +149,8 @@ export class SocketIOProvider extends Observable {
     this._url = url
     this.roomName = roomName
     this.doc = doc
+
+    this.enableAwareness = enableAwareness
     this.awareness = awareness
 
     this._broadcastChannel = `${url}/${roomName}`
@@ -167,11 +178,13 @@ export class SocketIOProvider extends Observable {
 
     this.initSyncListeners()
 
-    this.initAwarenessListeners()
+    if (this.enableAwareness) {
+      this.initAwarenessListeners()
+      awareness?.on('update', this.awarenessUpdate)
+    }
 
     this.initSystemListeners()
 
-    awareness.on('update', this.awarenessUpdate)
 
     if (autoConnect) this.connect()
   }
@@ -260,6 +273,8 @@ export class SocketIOProvider extends Observable {
    */
   initAwarenessListeners = () => {
     this.socket.on('awareness-update', (/** @type {ArrayBuffer} */ update) => {
+      if (!this.awareness) return
+
       AwarenessProtocol.applyAwarenessUpdate(
         this.awareness,
         new Uint8Array(update),
@@ -310,7 +325,7 @@ export class SocketIOProvider extends Observable {
         Y.applyUpdate(this.doc, new Uint8Array(update), this)
       }
     )
-    if (this.awareness.getLocalState() !== null) {
+    if (this.enableAwareness && this.awareness && this.awareness.getLocalState() !== null) {
       this.socket.emit(
         'awareness-update',
         AwarenessProtocol.encodeAwarenessUpdate(this.awareness, [
@@ -355,13 +370,15 @@ export class SocketIOProvider extends Observable {
 
     this.emit('connection-close', [event, this])
     this.synced = false
-    AwarenessProtocol.removeAwarenessStates(
-      this.awareness,
-      Array.from(this.awareness.getStates().keys()).filter(
-        (client) => client !== this.doc.clientID
-      ),
-      this
-    )
+    if (this.enableAwareness && this.awareness) {
+      AwarenessProtocol.removeAwarenessStates(
+        this.awareness,
+        Array.from(this.awareness.getStates().keys()).filter(
+          (client) => client !== this.doc.clientID
+        ),
+        this
+      )
+    }
     this.emit('status', [{ status: 'disconnected' }])
   }
 
@@ -382,8 +399,10 @@ export class SocketIOProvider extends Observable {
     if (this.resyncInterval != null) clearInterval(this.resyncInterval)
     this.disconnect()
     if (typeof window !== 'undefined') { window.removeEventListener('beforeunload', this.beforeUnloadHandler) } else if (typeof process !== 'undefined') { process.off('exit', this.beforeUnloadHandler) }
-    this.awareness.off('update', this.awarenessUpdate)
-    this.awareness.destroy()
+    if (this.enableAwareness) {
+      this.awareness?.off('update', this.awarenessUpdate)
+      this.awareness?.destroy()
+    }
     this.doc.off('update', this.onUpdateDoc)
     super.destroy()
   }
@@ -429,6 +448,8 @@ export class SocketIOProvider extends Observable {
    * @readonly
    */
   awarenessUpdate = ({ added, updated, removed }, origin) => {
+    if (!this.awareness) return
+
     const changedClients = added.concat(updated).concat(removed)
     this.socket.emit(
       'awareness-update',
@@ -457,6 +478,8 @@ export class SocketIOProvider extends Observable {
    * @readonly
    */
   beforeUnloadHandler = () => {
+    if (!this.enableAwareness || !this.awareness) return
+
     AwarenessProtocol.removeAwarenessStates(
       this.awareness,
       [this.doc.clientID],
@@ -485,21 +508,24 @@ export class SocketIOProvider extends Observable {
       { type: 'sync-step-2', data: Y.encodeStateAsUpdate(this.doc) },
       this
     )
-    bc.publish(
-      this._broadcastChannel,
-      { type: 'query-awareness', data: null },
-      this
-    )
-    bc.publish(
-      this._broadcastChannel,
-      {
-        type: 'awareness-update',
-        data: AwarenessProtocol.encodeAwarenessUpdate(this.awareness, [
-          this.doc.clientID
-        ])
-      },
-      this
-    )
+
+    if (this.enableAwareness && this.awareness) {
+      bc.publish(
+        this._broadcastChannel,
+        { type: 'query-awareness', data: null },
+        this
+      )
+      bc.publish(
+        this._broadcastChannel,
+        {
+          type: 'awareness-update',
+          data: AwarenessProtocol.encodeAwarenessUpdate(this.awareness, [
+            this.doc.clientID
+          ])
+        },
+        this
+      )
+    }
   }
 
   /**
@@ -509,18 +535,20 @@ export class SocketIOProvider extends Observable {
    * @readonly
    */
   disconnectBc = () => {
-    bc.publish(
-      this._broadcastChannel,
-      {
-        type: 'awareness-update',
-        data: AwarenessProtocol.encodeAwarenessUpdate(
-          this.awareness,
-          [this.doc.clientID],
-          new Map()
-        )
-      },
-      this
-    )
+    if (this.enableAwareness && this.awareness) {
+      bc.publish(
+        this._broadcastChannel,
+        {
+          type: 'awareness-update',
+          data: AwarenessProtocol.encodeAwarenessUpdate(
+            this.awareness,
+            [this.doc.clientID],
+            new Map()
+          )
+        },
+        this
+      )
+    }
     if (this.bcconnected) {
       bc.unsubscribe(this._broadcastChannel, this.onBroadcastChannelMessage)
       this.bcconnected = false
@@ -556,27 +584,33 @@ export class SocketIOProvider extends Observable {
           Y.applyUpdate(this.doc, new Uint8Array(message.data), this)
           break
 
-        case 'query-awareness':
-          bc.publish(
-            this._broadcastChannel,
-            {
-              type: 'awareness-update',
-              data: AwarenessProtocol.encodeAwarenessUpdate(
-                this.awareness,
-                Array.from(this.awareness.getStates().keys())
-              )
-            },
-            this
-          )
+        case 'query-awareness': {
+          if (this.enableAwareness && this.awareness) {
+            bc.publish(
+              this._broadcastChannel,
+              {
+                type: 'awareness-update',
+                data: AwarenessProtocol.encodeAwarenessUpdate(
+                  this.awareness,
+                  Array.from(this.awareness.getStates().keys())
+                )
+              },
+              this
+            )
+          }
           break
+        }
 
-        case 'awareness-update':
-          AwarenessProtocol.applyAwarenessUpdate(
-            this.awareness,
-            new Uint8Array(message.data),
-            this
-          )
+        case 'awareness-update': {
+          if (this.enableAwareness && this.awareness) {
+            AwarenessProtocol.applyAwarenessUpdate(
+              this.awareness,
+              new Uint8Array(message.data),
+              this
+            )
+          }
           break
+        }
 
         default:
           break
