@@ -309,7 +309,7 @@ export class Api {
           this.redisWorkerStreamName,
           this.redisWorkerGroupName,
           task.id
-        );
+        )
       } else {
         reclaimCounts++
         const { room, docid } = decodeRedisRoomStreamName(task.stream, this.prefix)
@@ -333,7 +333,7 @@ export class Api {
           this.redisWorkerStreamName,
           this.redisWorkerGroupName,
           task.id
-        );
+        )
 
         logWorker('Compacted stream ', { stream: task.stream, taskId: task.id, newLastId: lastId - this.redisMinMessageLifetime })
         try {
