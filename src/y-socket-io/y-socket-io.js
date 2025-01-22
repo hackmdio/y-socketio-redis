@@ -201,7 +201,7 @@ export class YSocketIO {
       ;(async () => {
         assert(this.client)
         assert(socket.user)
-        const doc = WORKER_DISABLED && this.namespaceDocMap.get(namespace) || (await this.client.getDoc(namespace, 'index'))
+        const doc = (WORKER_DISABLED && this.namespaceDocMap.get(namespace)) || (await this.client.getDoc(namespace, 'index'))
         if (WORKER_DISABLED) this.namespaceDocMap.set(namespace, doc)
 
         if (
@@ -247,7 +247,7 @@ export class YSocketIO {
       ) => {
         assert(this.client)
         const namespace = this.getNamespaceString(socket.nsp)
-        const doc = WORKER_DISABLED && this.namespaceDocMap.get(namespace) || (await this.client.getDoc(namespace, 'index'))
+        const doc = (WORKER_DISABLED && this.namespaceDocMap.get(namespace)) || (await this.client.getDoc(namespace, 'index'))
         if (WORKER_DISABLED) this.namespaceDocMap.set(namespace, doc)
         assert(doc)
         syncStep2(Y.encodeStateAsUpdate(doc.ydoc, stateVector))
