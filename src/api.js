@@ -300,6 +300,7 @@ export class Api {
       if (streamlen === 0) {
         await this.redis.multi()
           .xDelIfEmpty(task.stream)
+          .xAck(this.redisWorkerStreamName, this.redisWorkerGroupName, task.id)
           .xDel(this.redisWorkerStreamName, task.id)
           .sRem(this.workerSetName, task.stream)
           .exec()
@@ -318,6 +319,7 @@ export class Api {
           this.redis.multi()
             .xTrim(task.stream, 'MINID', lastId - this.redisMinMessageLifetime)
             .xAdd(this.redisWorkerStreamName, '*', { compact: task.stream })
+            .xAck(this.redisWorkerStreamName, this.redisWorkerGroupName, task.id)
             .xDel(this.redisWorkerStreamName, task.id)
             .sAdd(this.workerSetName, task.stream)
             .exec()
