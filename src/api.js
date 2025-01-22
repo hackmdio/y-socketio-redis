@@ -124,11 +124,11 @@ export class Api {
         addMessage: redis.defineScript({
           NUMBER_OF_KEYS: 1,
           SCRIPT: `
-            if redis.call("EXISTS", KEYS[1]) == 0 then
-              redis.call("XADD", "${this.redisWorkerStreamName}", "*", "compact", KEYS[1])
-            elseif redis.call("XLEN", KEYS[1]) > 100 then
-              redis.call("SADD", "${this.prefix}:worker:checklist", KEYS[1])
-            end
+            -- if redis.call("EXISTS", KEYS[1]) == 0 then
+            --   redis.call("XADD", "${this.redisWorkerStreamName}", "*", "compact", KEYS[1])
+            -- elseif redis.call("XLEN", KEYS[1]) > 100 then
+            --   redis.call("SADD", "${this.prefix}:worker:checklist", KEYS[1])
+            -- end
             redis.call("XADD", KEYS[1], "*", "m", ARGV[1])
           `,
           /**
