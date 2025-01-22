@@ -44,7 +44,7 @@ process.on('SIGINT', function () {
  *
  * @typedef {{
  *   ydoc: Y.Doc;
- *   awareness: AwarenessProtocol.Awareness;
+ *   awareness: AwarenessProtocol.Awareness | null;
  *   redisLastId: string;
  *   storeReferences: any[] | null;
  * }} RedisDoc
@@ -412,7 +412,7 @@ export class YSocketIO {
           .catch(console.error)
       }
     )
-    if (this.configuration.enableAwareness && doc.awareness.states.size > 0) {
+    if (this.configuration.enableAwareness && doc.awareness && doc.awareness.states.size > 0) {
       socket.emit(
         'awareness-update',
         AwarenessProtocol.encodeAwarenessUpdate(

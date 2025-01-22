@@ -185,7 +185,6 @@ export class SocketIOProvider extends Observable {
 
     this.initSystemListeners()
 
-
     if (autoConnect) this.connect()
   }
 
