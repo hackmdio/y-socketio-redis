@@ -266,6 +266,35 @@ export class Api {
   }
 
   /**
+   * @param {string} room
+   * @param {string} docid
+   */
+  async getRedisLastId (room, docid) {
+    const ms = extractMessagesFromStreamReply(await this.redis.xRead(redis.commandOptions({ returnBuffers: true }), { key: computeRedisRoomStreamName(room, docid, this.prefix), id: '0' }), this.prefix)
+    const docMessages = ms.get(room)?.get(docid) || null
+    return docMessages?.lastId.toString() || '0'
+  }
+
+  /**
+   * @param {string} room
+   * @param {string} docid
+   * @param {boolean} [remove=false]
+   */
+  async trimRoomStream (room, docid, remove = false) {
+    const roomName = computeRedisRoomStreamName(room, docid, this.prefix)
+    const redisLastId = await this.getRedisLastId(room, docid)
+    const lastId = number.parseInt(redisLastId.split('-')[0])
+    if (remove) {
+      await this.redis.del(roomName)
+    } else {
+      await this.redis.multi()
+        .xTrim(roomName, 'MINID', lastId - this.redisMinMessageLifetime)
+        .xDelIfEmpty(roomName)
+        .exec()
+    }
+  }
+
+  /**
    * @param {Object} opts
    * @param {number} [opts.blockTime]
    * @param {number} [opts.tryReclaimCount]
