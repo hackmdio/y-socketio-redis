@@ -19,6 +19,7 @@ let ydocUpdateCallback = env.getConf('ydoc-update-callback')
 if (ydocUpdateCallback != null && ydocUpdateCallback.slice(-1) !== '/') {
   ydocUpdateCallback += '/'
 }
+const WORKER_DISABLED = env.getConf('y-worker-disabled') === 'true'
 
 /**
  * @param {string} a
@@ -117,20 +118,25 @@ export class Api {
     this.redisWorkerGroupName = this.prefix + ':worker'
     this.workerSetName = `${this.prefix}:worker:${this.consumername}:idset`
     this._destroyed = false
+
+    const addScript = WORKER_DISABLED
+      ? 'redis.call("XADD", KEYS[1], "*", "m", ARGV[1])'
+      : `
+          if redis.call("EXISTS", KEYS[1]) == 0 then
+            redis.call("XADD", "${this.redisWorkerStreamName}", "*", "compact", KEYS[1])
+          elseif redis.call("XLEN", KEYS[1]) > 100 then
+            redis.call("SADD", "${this.prefix}:worker:checklist", KEYS[1])
+          end
+          redis.call("XADD", KEYS[1], "*", "m", ARGV[1])
+        `
+
     this.redis = redis.createClient({
       url,
       // scripting: https://github.com/redis/node-redis/#lua-scripts
       scripts: {
         addMessage: redis.defineScript({
           NUMBER_OF_KEYS: 1,
-          SCRIPT: `
-            -- if redis.call("EXISTS", KEYS[1]) == 0 then
-            --   redis.call("XADD", "${this.redisWorkerStreamName}", "*", "compact", KEYS[1])
-            -- elseif redis.call("XLEN", KEYS[1]) > 100 then
-            --   redis.call("SADD", "${this.prefix}:worker:checklist", KEYS[1])
-            -- end
-            redis.call("XADD", KEYS[1], "*", "m", ARGV[1])
-          `,
+          SCRIPT: addScript,
           /**
            * @param {string} key
            * @param {Buffer} message

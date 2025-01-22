@@ -17,6 +17,7 @@ import toobusy from 'toobusy-js'
 const logSocketIO = createModuleLogger('@y/socket-io/server')
 const PERSIST_INTERVAL = number.parseInt(env.getConf('y-socket-io-server-persist-interval') || '3000')
 const REVALIDATE_TIMEOUT = number.parseInt(env.getConf('y-socket-io-server-revalidate-timeout') || '60000')
+const WORKER_DISABLED = env.getConf('y-worker-disabled') === 'true'
 
 process.on('SIGINT', function () {
   // calling .shutdown allows your process to exit normally
@@ -200,10 +201,8 @@ export class YSocketIO {
       ;(async () => {
         assert(this.client)
         assert(socket.user)
-        const doc =
-          this.namespaceDocMap.get(namespace) ||
-          (await this.client.getDoc(namespace, 'index'))
-        this.namespaceDocMap.set(namespace, doc)
+        const doc = WORKER_DISABLED && this.namespaceDocMap.get(namespace) || (await this.client.getDoc(namespace, 'index'))
+        if (WORKER_DISABLED) this.namespaceDocMap.set(namespace, doc)
 
         if (
           api.isSmallerRedisId(doc.redisLastId, socket.user.initialRedisSubId)
@@ -248,10 +247,8 @@ export class YSocketIO {
       ) => {
         assert(this.client)
         const namespace = this.getNamespaceString(socket.nsp)
-        const doc =
-          this.namespaceDocMap.get(namespace) ||
-          (await this.client.getDoc(namespace, 'index'))
-        this.namespaceDocMap.set(namespace, doc)
+        const doc = WORKER_DISABLED && this.namespaceDocMap.get(namespace) || (await this.client.getDoc(namespace, 'index'))
+        if (WORKER_DISABLED) this.namespaceDocMap.set(namespace, doc)
         assert(doc)
         syncStep2(Y.encodeStateAsUpdate(doc.ydoc, stateVector))
       }
@@ -403,6 +400,8 @@ export class YSocketIO {
       if (msg.length === 0) continue
       nsp.emit('awareness-update', msg)
     }
+
+    if (!WORKER_DISABLED) return
 
     let changed = false
     const existDoc = this.namespaceDocMap.get(namespace)
