@@ -6,11 +6,23 @@ import * as decoding from 'lib0/decoding'
 import { assert } from 'lib0/testing'
 import * as api from '../api.js'
 import * as protocol from '../protocol.js'
+import * as number from 'lib0/number'
+import * as env from 'lib0/environment'
 import { createSubscriber } from '../subscriber.js'
 import { isDeepStrictEqual } from 'util'
 import { User } from './user.js'
+import { createModuleLogger } from 'lib0/logging'
+import toobusy from 'toobusy-js'
 
-const PERSIST_INTERVAL = 5000
+const logSocketIO = createModuleLogger('@y/socket-io/server')
+const PERSIST_INTERVAL = number.parseInt(env.getConf('y-socket-io-server-persist-interval') || '3000')
+const REVALIDATE_TIMEOUT = number.parseInt(env.getConf('y-socket-io-server-revalidate-timeout') || '60000')
+
+process.on('SIGINT', function() {
+  // calling .shutdown allows your process to exit normally
+  toobusy.shutdown();
+  process.exit();
+});
 
 /**
  * @typedef {import('socket.io').Namespace} Namespace
@@ -141,7 +153,7 @@ export class YSocketIO {
       if (this.configuration.authenticate === null) return next()
       const userCache = this.socketUserCache.get(socket)
       const namespace = this.getNamespaceString(socket.nsp)
-      if (!userCache || Date.now() - userCache.validatedAt > 60_000) {
+      if (!userCache || Date.now() - userCache.validatedAt > REVALIDATE_TIMEOUT) {
         this.socketUserCache.delete(socket)
         const user = await this.configuration.authenticate(socket)
         if (!user) return next(new Error('Unauthorized'))
@@ -158,9 +170,14 @@ export class YSocketIO {
     this.nsp.on('connection', async (socket) => {
       assert(this.client)
       assert(this.subscriber)
+      const namespace = this.getNamespaceString(socket.nsp)
+      if (toobusy()) {
+        logSocketIO(`warning server too busy, rejecting connection: ${namespace}`)
+        throw new Error('server too busy, please try again latter')
+      }
       if (!socket.user) throw new Error('user does not exist in socket')
 
-      const namespace = this.getNamespaceString(socket.nsp)
+      logSocketIO(`new connection in namespace: ${namespace}`)
       const stream = api.computeRedisRoomStreamName(
         namespace,
         'index',
@@ -409,7 +426,7 @@ export class YSocketIO {
       changed = getDoc.changed
     }
     assert(doc)
-    if (changed) this.debouncedPersist(namespace, doc.ydoc)
+    this.debouncedPersist(namespace, doc.ydoc)
     this.namespaceDocMap.get(namespace)?.ydoc.destroy()
     this.namespaceDocMap.set(namespace, doc)
     await this.client.trimRoomStream(namespace, 'index', nsp.sockets.size === 0)
