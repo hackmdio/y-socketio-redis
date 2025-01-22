@@ -16,6 +16,7 @@ import toobusy from 'toobusy-js'
 
 const logSocketIO = createModuleLogger('@y/socket-io/server')
 const PERSIST_INTERVAL = number.parseInt(env.getConf('y-socket-io-server-persist-interval') || '3000')
+const MAX_PERSIST_INTERVAL = number.parseInt(env.getConf('y-socket-io-server-max-persist-interval') || '30000')
 const REVALIDATE_TIMEOUT = number.parseInt(env.getConf('y-socket-io-server-revalidate-timeout') || '60000')
 const WORKER_DISABLED = env.getConf('y-worker-disabled') === 'true'
 
@@ -117,6 +118,24 @@ export class YSocketIO {
    * @readonly
    */
   socketUserCache = new Map()
+  /**
+   * @type {Map<string, NodeJS.Timeout | null>}
+   * @private
+   * @readonly
+   */
+  debouncedPersistMap = new Map()
+  /**
+   * @type {Map<string, Y.Doc>}
+   * @private
+   * @readonly
+   */
+  debouncedPersistDocMap = new Map()
+  /**
+   * @type {Map<string, number>}
+   * @private
+   * @readonly
+   */
+  namespacePersistentMap = new Map()
 
   /**
    * YSocketIO constructor.
@@ -323,6 +342,7 @@ export class YSocketIO {
           this.namespaceMap.delete(ns)
           this.namespaceDocMap.get(ns)?.ydoc.destroy()
           this.namespaceDocMap.delete(ns)
+          this.namespacePersistentMap.delete(ns)
         }
       }
     })
@@ -379,6 +399,7 @@ export class YSocketIO {
       this.namespaceMap.delete(namespace)
       this.namespaceDocMap.get(namespace)?.ydoc.destroy()
       this.namespaceDocMap.delete(namespace)
+      this.namespacePersistentMap.delete(namespace)
     }
 
     /** @type {Uint8Array[]} */
@@ -429,19 +450,16 @@ export class YSocketIO {
       changed = getDoc.changed
     }
     assert(doc)
-    if (changed) this.debouncedPersist(namespace, doc.ydoc)
+    const lastPersistCalledAt = this.namespacePersistentMap.get(namespace) ?? 0
+    const now = Date.now()
+    const shouldPersist = now - lastPersistCalledAt > MAX_PERSIST_INTERVAL
+    if (changed || shouldPersist) {
+      this.namespacePersistentMap.set(namespace, now)
+      this.debouncedPersist(namespace, doc.ydoc)
+    }
     this.namespaceDocMap.get(namespace)?.ydoc.destroy()
     this.namespaceDocMap.set(namespace, doc)
   }
-
-  /**
-   * @type {Map<string, NodeJS.Timeout | null>}
-   */
-  debouncedPersistMap = new Map()
-  /**
-   * @type {Map<string, Y.Doc>}
-   */
-  debouncedPersistDocMap = new Map()
 
   /**
    * @param {string} namespace
