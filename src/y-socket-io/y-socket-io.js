@@ -478,16 +478,17 @@ export class YSocketIO {
   async debouncedPersist (namespace, doc) {
     this.debouncedPersistDocMap.set(namespace, doc)
     if (this.debouncedPersistMap.has(namespace)) return
-    this.debouncedPersistMap.set(
-      namespace,
-      setTimeout(
-        async () => {
+    const timeout = setTimeout(
+      async () => {
+        try {
           assert(this.client)
           const doc = this.debouncedPersistDocMap.get(namespace)
+          logSocketIO(`trying to persist ${namespace}`)
           if (!doc) return
+          /** @type {Promise<void> | null} */
+          let workerPromise = null
           if (this.client.persistWorker) {
-            /** @type {Promise<void>} */
-            const promise = new Promise((resolve) => {
+            workerPromise = new Promise((resolve) => {
               assert(this.client?.persistWorker)
               this.awaitingPersistMap.set(namespace, resolve)
 
@@ -499,17 +500,24 @@ export class YSocketIO {
                 docstate: buf
               })
             })
-            await promise
+            if (workerPromise) {
+              await workerPromise
+            }
           } else {
             await this.client.store.persistDoc(namespace, 'index', doc)
           }
           await this.client.trimRoomStream(namespace, 'index', true)
+        } catch (e) {
+          console.error(e)
+        } finally {
           this.debouncedPersistDocMap.delete(namespace)
           this.debouncedPersistMap.delete(namespace)
-        },
-        PERSIST_INTERVAL + (Math.random() - 0.5) * PERSIST_INTERVAL
-      )
+        }
+      },
+      PERSIST_INTERVAL + (Math.random() - 0.5) * PERSIST_INTERVAL
     )
+
+    this.debouncedPersistMap.set(namespace, timeout)
   }
 
   /**

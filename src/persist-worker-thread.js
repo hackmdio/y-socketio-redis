@@ -25,11 +25,13 @@ export class PersistWorkerThread {
    * @param {{ room: string, docstate: SharedArrayBuffer }} props
    */
   persist = async ({ room, docstate }) => {
+    this.log(`persisting ${room} in worker`)
     const state = new Uint8Array(docstate)
     const doc = new Y.Doc()
     Y.applyUpdateV2(doc, state)
     await this.store?.persistDoc(room, 'index', doc)
     doc.destroy()
+    parentPort?.postMessage({ event: 'persisted', room })
   }
 }
 
