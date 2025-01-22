@@ -487,9 +487,9 @@ export class YSocketIO {
           if (!doc) return
           if (this.client.persistWorker) {
             /** @type {Promise<void>} */
-            const promise = new Promise((res) => {
+            const promise = new Promise((resolve) => {
               assert(this.client?.persistWorker)
-              this.awaitingPersistMap.set(namespace, res)
+              this.awaitingPersistMap.set(namespace, resolve)
 
               const docState = Y.encodeStateAsUpdateV2(doc)
               const buf = new Uint8Array(new SharedArrayBuffer(docState.length))

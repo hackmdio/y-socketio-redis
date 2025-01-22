@@ -1,7 +1,6 @@
 import * as Y from 'yjs'
 import * as logging from 'lib0/logging'
-import { Worker, isMainThread, parentPort, workerData } from 'worker_threads'
-import path from 'path'
+import { isMainThread, parentPort } from 'worker_threads'
 
 export class PersistWorkerThread {
   /**
@@ -13,7 +12,7 @@ export class PersistWorkerThread {
   /**
    * @param {import('./storage.js').AbstractStorage} store
    */
-  constructor(store) {
+  constructor (store) {
     if (isMainThread) {
       this.log('persist worker cannot run on main thread')
       return
@@ -37,7 +36,7 @@ export class PersistWorkerThread {
 /**
  * @param {import('./storage.js').AbstractStorage} store
  */
-export function createPersistWorkerThread(store) {
+export function createPersistWorkerThread (store) {
   if (isMainThread) throw new Error('cannot create persist worker in main thread')
   return new PersistWorkerThread(store)
 }
