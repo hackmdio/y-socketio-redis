@@ -4,10 +4,13 @@ import * as promise from 'lib0/promise'
 import * as encoding from 'lib0/encoding'
 import * as decoding from 'lib0/decoding'
 import { assert } from 'lib0/testing'
-import { User } from './user.js'
 import * as api from '../api.js'
 import * as protocol from '../protocol.js'
 import { createSubscriber } from '../subscriber.js'
+import { isDeepStrictEqual } from 'util'
+import { User } from './user.js'
+
+const PERSIST_INTERVAL = 5000
 
 /**
  * @typedef {import('socket.io').Namespace} Namespace
@@ -89,6 +92,18 @@ export class YSocketIO {
    * @readonly
    */
   namespaceMap = new Map()
+  /**
+   * @type {Map<string, RedisDoc>}
+   * @private
+   * @readonly
+   */
+  namespaceDocMap = new Map()
+  /**
+   * @type {Map<Socket, { user: UserLike, validatedAt: number }>}
+   * @private
+   * @readonly
+   */
+  socketUserCache = new Map()
 
   /**
    * YSocketIO constructor.
@@ -123,12 +138,21 @@ export class YSocketIO {
     this.nsp = this.io.of(/^\/yjs\|.*$/)
 
     this.nsp.use(async (socket, next) => {
-      if (this.configuration.authenticate == null) return next()
-      const user = await this.configuration.authenticate(socket)
-      if (user) {
-        socket.user = new User(this.getNamespaceString(socket.nsp), user.userid)
-        return next()
-      } else return next(new Error('Unauthorized'))
+      if (this.configuration.authenticate === null) return next()
+      const userCache = this.socketUserCache.get(socket)
+      const namespace = this.getNamespaceString(socket.nsp)
+      if (!userCache || Date.now() - userCache.validatedAt > 60_000) {
+        this.socketUserCache.delete(socket)
+        const user = await this.configuration.authenticate(socket)
+        if (!user) return next(new Error('Unauthorized'))
+        this.socketUserCache.set(socket, { user, validatedAt: Date.now() })
+        socket.user = new User(namespace, user.userid)
+      } else {
+        socket.user = new User(namespace, userCache.user.userid)
+      }
+
+      if (socket.user) return next()
+      else return next(new Error('Unauthorized'))
     })
 
     this.nsp.on('connection', async (socket) => {
@@ -156,17 +180,23 @@ export class YSocketIO {
       this.initSyncListeners(socket)
       this.initAwarenessListeners(socket)
       this.initSocketListeners(socket)
+      ;(async () => {
+        assert(this.client)
+        assert(socket.user)
+        const doc =
+          this.namespaceDocMap.get(namespace) ||
+          (await this.client.getDoc(namespace, 'index'))
+        this.namespaceDocMap.set(namespace, doc)
 
-      const doc = await this.client.getDoc(namespace, 'index')
-
-      if (
-        api.isSmallerRedisId(doc.redisLastId, socket.user.initialRedisSubId)
-      ) {
-        // our subscription is newer than the content that we received from the api
-        // need to renew subscription id and make sure that we catch the latest content.
-        this.subscriber.ensureSubId(stream, doc.redisLastId)
-      }
-      this.startSynchronization(socket, doc)
+        if (
+          api.isSmallerRedisId(doc.redisLastId, socket.user.initialRedisSubId)
+        ) {
+          // our subscription is newer than the content that we received from the api
+          // need to renew subscription id and make sure that we catch the latest content.
+          this.subscriber?.ensureSubId(stream, doc.redisLastId)
+        }
+        this.startSynchronization(socket, doc)
+      })()
     })
 
     return { client, subscriber }
@@ -200,22 +230,31 @@ export class YSocketIO {
         syncStep2
       ) => {
         assert(this.client)
-        const doc = await this.client.getDoc(
-          this.getNamespaceString(socket.nsp),
-          'index'
-        )
+        const namespace = this.getNamespaceString(socket.nsp)
+        const doc =
+          this.namespaceDocMap.get(namespace) ||
+          (await this.client.getDoc(namespace, 'index'))
+        this.namespaceDocMap.set(namespace, doc)
+        assert(doc)
         syncStep2(Y.encodeStateAsUpdate(doc.ydoc, stateVector))
       }
     )
 
+    /** @type {unknown} */
+    let prevMsg = null
     socket.on('sync-update', (/** @type {ArrayBuffer} */ update) => {
+      if (isDeepStrictEqual(update, prevMsg)) return
       assert(this.client)
+      const namespace = this.getNamespaceString(socket.nsp)
       const message = Buffer.from(update.slice(0, update.byteLength))
-      this.client.addMessage(
-        this.getNamespaceString(socket.nsp),
-        'index',
-        Buffer.from(this.toRedis('sync-update', message))
-      ).catch(console.error)
+      this.client
+        .addMessage(
+          namespace,
+          'index',
+          Buffer.from(this.toRedis('sync-update', message))
+        )
+        .catch(console.error)
+      prevMsg = update
     })
   }
 
@@ -232,14 +271,19 @@ export class YSocketIO {
    * @readonly
    */
   initAwarenessListeners = (socket) => {
+    /** @type {unknown} */
+    const prevMsg = null
     socket.on('awareness-update', (/** @type {ArrayBuffer} */ update) => {
+      if (isDeepStrictEqual(update, prevMsg)) return
       assert(this.client)
       const message = Buffer.from(update.slice(0, update.byteLength))
-      this.client.addMessage(
-        this.getNamespaceString(socket.nsp),
-        'index',
-        Buffer.from(this.toRedis('awareness-update', new Uint8Array(message)))
-      ).catch(console.error)
+      this.client
+        .addMessage(
+          this.getNamespaceString(socket.nsp),
+          'index',
+          Buffer.from(this.toRedis('awareness-update', new Uint8Array(message)))
+        )
+        .catch(console.error)
     })
   }
 
@@ -253,14 +297,18 @@ export class YSocketIO {
     socket.on('disconnect', async () => {
       assert(this.subscriber)
       if (!socket.user) return
-      for (const ns of socket.user.subs) {
-        const stream = this.namespaceStreamMap.get(ns)
+      this.socketUserCache.delete(socket)
+      for (const stream of socket.user.subs) {
+        const ns = this.streamNamespaceMap.get(stream)
+        if (!ns) continue
         const nsp = this.namespaceMap.get(ns)
         if (nsp?.sockets.size === 0 && stream) {
           this.subscriber.unsubscribe(stream, this.redisMessageSubscriber)
           this.namespaceStreamMap.delete(ns)
           this.streamNamespaceMap.delete(stream)
           this.namespaceMap.delete(ns)
+          this.namespaceDocMap.get(ns)?.ydoc.destroy()
+          this.namespaceDocMap.delete(ns)
         }
       }
     })
@@ -280,11 +328,13 @@ export class YSocketIO {
       (/** @type {Uint8Array} */ update) => {
         assert(this.client)
         const message = Buffer.from(update.slice(0, update.byteLength))
-        this.client.addMessage(
-          this.getNamespaceString(socket.nsp),
-          'index',
-          Buffer.from(this.toRedis('sync-step-2', message))
-        ).catch(console.error)
+        this.client
+          .addMessage(
+            this.getNamespaceString(socket.nsp),
+            'index',
+            Buffer.from(this.toRedis('sync-step-2', message))
+          )
+          .catch(console.error)
       }
     )
     if (doc.awareness.states.size > 0) {
@@ -303,7 +353,7 @@ export class YSocketIO {
    * @param {string} stream
    * @param {Array<Uint8Array>} messages
    */
-  redisMessageSubscriber = (stream, messages) => {
+  redisMessageSubscriber = async (stream, messages) => {
     const namespace = this.streamNamespaceMap.get(stream)
     if (!namespace) return
     const nsp = this.namespaceMap.get(namespace)
@@ -313,6 +363,8 @@ export class YSocketIO {
       this.namespaceStreamMap.delete(namespace)
       this.streamNamespaceMap.delete(stream)
       this.namespaceMap.delete(namespace)
+      this.namespaceDocMap.get(namespace)?.ydoc.destroy()
+      this.namespaceDocMap.delete(namespace)
     }
 
     /** @type {Uint8Array[]} */
@@ -334,6 +386,65 @@ export class YSocketIO {
       if (msg.length === 0) continue
       nsp.emit('awareness-update', msg)
     }
+
+    let changed = false
+    const existDoc = this.namespaceDocMap.get(namespace)
+    if (existDoc) {
+      existDoc.ydoc.on('afterTransaction', (tr) => {
+        changed = tr.changed.size > 0
+      })
+      Y.transact(existDoc.ydoc, () => {
+        for (const msg of updates) Y.applyUpdate(existDoc.ydoc, msg)
+        for (const msg of awareness) {
+          AwarenessProtocol.applyAwarenessUpdate(existDoc.awareness, msg, null)
+        }
+      })
+    }
+
+    assert(this.client)
+    let doc = existDoc
+    if (!existDoc) {
+      const getDoc = await this.client.getDoc(namespace, 'index')
+      doc = getDoc
+      changed = getDoc.changed
+    }
+    assert(doc)
+    if (changed) this.debouncedPersist(namespace, doc.ydoc)
+    this.namespaceDocMap.get(namespace)?.ydoc.destroy()
+    this.namespaceDocMap.set(namespace, doc)
+    await this.client.trimRoomStream(namespace, 'index', nsp.sockets.size === 0)
+  }
+
+  /**
+   * @type {Map<string, NodeJS.Timeout | null>}
+   */
+  debouncedPersistMap = new Map()
+  /**
+   * @type {Map<string, Y.Doc>}
+   */
+  debouncedPersistDocMap = new Map()
+
+  /**
+   * @param {string} namespace
+   * @param {Y.Doc} doc
+   */
+  async debouncedPersist (namespace, doc) {
+    this.debouncedPersistDocMap.set(namespace, doc)
+    if (this.debouncedPersistMap.has(namespace)) return
+    this.debouncedPersistMap.set(
+      namespace,
+      setTimeout(
+        async () => {
+          assert(this.client)
+          const doc = this.debouncedPersistDocMap.get(namespace)
+          if (!doc) return
+          await this.client.store.persistDoc(namespace, 'index', doc)
+          this.debouncedPersistDocMap.delete(namespace)
+          this.debouncedPersistMap.delete(namespace)
+        },
+        PERSIST_INTERVAL + (Math.random() - 0.5) * PERSIST_INTERVAL
+      )
+    )
   }
 
   /**
