@@ -18,11 +18,11 @@ const logSocketIO = createModuleLogger('@y/socket-io/server')
 const PERSIST_INTERVAL = number.parseInt(env.getConf('y-socket-io-server-persist-interval') || '3000')
 const REVALIDATE_TIMEOUT = number.parseInt(env.getConf('y-socket-io-server-revalidate-timeout') || '60000')
 
-process.on('SIGINT', function() {
+process.on('SIGINT', function () {
   // calling .shutdown allows your process to exit normally
-  toobusy.shutdown();
-  process.exit();
-});
+  toobusy.shutdown()
+  process.exit()
+})
 
 /**
  * @typedef {import('socket.io').Namespace} Namespace
@@ -411,8 +411,12 @@ export class YSocketIO {
         changed = tr.changed.size > 0
       })
       Y.transact(existDoc.ydoc, () => {
-        for (const msg of updates) Y.applyUpdate(existDoc.ydoc, msg)
+        for (const msg of updates) {
+          if (msg.length === 0) continue
+          Y.applyUpdate(existDoc.ydoc, msg)
+        }
         for (const msg of awareness) {
+          if (msg.length === 0) continue
           AwarenessProtocol.applyAwarenessUpdate(existDoc.awareness, msg, null)
         }
       })
@@ -426,10 +430,9 @@ export class YSocketIO {
       changed = getDoc.changed
     }
     assert(doc)
-    this.debouncedPersist(namespace, doc.ydoc)
+    if (changed) this.debouncedPersist(namespace, doc.ydoc)
     this.namespaceDocMap.get(namespace)?.ydoc.destroy()
     this.namespaceDocMap.set(namespace, doc)
-    await this.client.trimRoomStream(namespace, 'index', nsp.sockets.size === 0)
   }
 
   /**
@@ -456,6 +459,7 @@ export class YSocketIO {
           const doc = this.debouncedPersistDocMap.get(namespace)
           if (!doc) return
           await this.client.store.persistDoc(namespace, 'index', doc)
+          await this.client.trimRoomStream(namespace, 'index', true)
           this.debouncedPersistDocMap.delete(namespace)
           this.debouncedPersistMap.delete(namespace)
         },
