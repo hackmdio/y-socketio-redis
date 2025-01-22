@@ -301,15 +301,10 @@ export class Api {
         await this.redis.multi()
           .xDelIfEmpty(task.stream)
           .xDel(this.redisWorkerStreamName, task.id)
+          .xAck(this.redisWorkerStreamName, this.redisWorkerGroupName, task.id)
           .sRem(this.workerSetName, task.stream)
           .exec()
         logWorker('Stream still empty, removing recurring task from queue ', { stream: task.stream })
-
-        await this.redis.xAck(
-          this.redisWorkerStreamName,
-          this.redisWorkerGroupName,
-          task.id
-        )
       } else {
         reclaimCounts++
         const { room, docid } = decodeRedisRoomStreamName(task.stream, this.prefix)
@@ -325,16 +320,10 @@ export class Api {
             .xTrim(task.stream, 'MINID', lastId - this.redisMinMessageLifetime)
             .xAdd(this.redisWorkerStreamName, '*', { compact: task.stream })
             .xDel(this.redisWorkerStreamName, task.id)
+            .xAck(this.redisWorkerStreamName, this.redisWorkerGroupName, task.id)
             .sAdd(this.workerSetName, task.stream)
             .exec()
         ])
-
-        await this.redis.xAck(
-          this.redisWorkerStreamName,
-          this.redisWorkerGroupName,
-          task.id
-        )
-
         logWorker('Compacted stream ', { stream: task.stream, taskId: task.id, newLastId: lastId - this.redisMinMessageLifetime })
         try {
           if (ydocUpdateCallback != null) {
