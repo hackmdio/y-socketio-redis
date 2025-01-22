@@ -136,6 +136,12 @@ export class YSocketIO {
    * @readonly
    */
   namespacePersistentMap = new Map()
+  /**
+   * @type {Map<string, () => void>}
+   * @private
+   * @readonly
+   */
+  awaitingPersistMap = new Map()
 
   /**
    * YSocketIO constructor.
@@ -156,16 +162,20 @@ export class YSocketIO {
    *
    *  It also starts socket connection listeners.
    * @param {import('../storage.js').AbstractStorage} store
-   * @param {{ redisPrefix?: string, redisUrl?: string }=} opts
+   * @param {{ redisPrefix?: string, redisUrl?: string, persistWorker?: import('worker_threads').Worker }=} opts
    * @public
    */
-  async initialize (store, { redisUrl, redisPrefix = 'y' } = {}) {
+  async initialize (store, { redisUrl, redisPrefix = 'y', persistWorker } = {}) {
     const [client, subscriber] = await promise.all([
       api.createApiClient(store, { redisUrl, redisPrefix }),
       createSubscriber(store, { redisUrl, redisPrefix })
     ])
     this.client = client
     this.subscriber = subscriber
+    if (persistWorker) {
+      this.client.persistWorker = persistWorker
+      this.registerPersistWorkerResolve()
+    }
 
     this.nsp = this.io.of(/^\/yjs\|.*$/)
 
@@ -475,7 +485,24 @@ export class YSocketIO {
           assert(this.client)
           const doc = this.debouncedPersistDocMap.get(namespace)
           if (!doc) return
-          await this.client.store.persistDoc(namespace, 'index', doc)
+          if (this.client.persistWorker) {
+            /** @type {Promise<void>} */
+            const promise = new Promise((res) => {
+              assert(this.client?.persistWorker)
+              this.awaitingPersistMap.set(namespace, res)
+
+              const docState = Y.encodeStateAsUpdateV2(doc)
+              const buf = new Uint8Array(new SharedArrayBuffer(docState.length))
+              buf.set(docState)
+              this.client.persistWorker.postMessage({
+                room: namespace,
+                docstate: buf
+              })
+            })
+            await promise
+          } else {
+            await this.client.store.persistDoc(namespace, 'index', doc)
+          }
           await this.client.trimRoomStream(namespace, 'index', true)
           this.debouncedPersistDocMap.delete(namespace)
           this.debouncedPersistMap.delete(namespace)
@@ -568,5 +595,12 @@ export class YSocketIO {
     } catch (e) {
       console.error(e)
     }
+  }
+
+  registerPersistWorkerResolve () {
+    if (!this.client?.persistWorker) return
+    this.client.persistWorker.on('message', ({ event, room }) => {
+      if (event === 'persisted') this.awaitingPersistMap.get(room)?.()
+    })
   }
 }

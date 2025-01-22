@@ -37,9 +37,10 @@ class YSocketIOServer {
  * @param {string} [conf.redisPrefix]
  * @param {string} [conf.redisUrl]
  * @param {import('./y-socket-io/y-socket-io.js').YSocketIOConfiguration['authenticate']} conf.authenticate
+ * @param {import('worker_threads').Worker=} [conf.persistWorker]
  */
-export const registerYSocketIOServer = async (io, store, { authenticate, redisUrl, redisPrefix }) => {
+export const registerYSocketIOServer = async (io, store, { authenticate, redisUrl, redisPrefix, persistWorker }) => {
   const app = new YSocketIO(io, { authenticate })
-  const { client, subscriber } = await app.initialize(store, { redisUrl, redisPrefix })
+  const { client, subscriber } = await app.initialize(store, { redisUrl, redisPrefix, persistWorker })
   return new YSocketIOServer(app, client, subscriber)
 }
