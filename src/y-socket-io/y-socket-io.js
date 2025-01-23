@@ -536,7 +536,17 @@ export class YSocketIO {
           } else {
             await this.client.store.persistDoc(namespace, 'index', doc)
           }
-          await this.client.trimRoomStream(namespace, 'index')
+
+          /**
+           * there's a possibility where the namespace is deleted after the
+           * persist promise resolved, so we have to check if the room still
+           * exist.
+           * @see cleanupNamespace
+           * @see cleanupNamespaceImpl
+           */
+          if (this.namespaceMap.has(namespace)) {
+            await this.client.trimRoomStream(namespace, 'index')
+          }
         } catch (e) {
           console.error(e)
         } finally {
