@@ -44,7 +44,7 @@ process.on('SIGINT', function () {
  *
  * @typedef {{
  *   ydoc: Y.Doc;
- *   awareness: AwarenessProtocol.Awareness;
+ *   awareness: AwarenessProtocol.Awareness | null;
  *   redisLastId: string;
  *   storeReferences: any[] | null;
  * }} RedisDoc
@@ -57,6 +57,8 @@ process.on('SIGINT', function () {
  *
  * @prop {(socket: Socket)=> Promise<UserLike | null> | UserLike | null} authenticate
  * Callback to authenticate the client connection.
+ * @prop {boolean=} enableAwareness
+ * Enable/disable awareness functionality, defaults to true
  */
 
 /**
@@ -159,7 +161,10 @@ export class YSocketIO {
    */
   constructor (io, configuration) {
     this.io = io
-    this.configuration = configuration
+    this.configuration = {
+      enableAwareness: true,
+      ...configuration
+    }
   }
 
   /**
@@ -174,9 +179,10 @@ export class YSocketIO {
    * @public
    */
   async initialize (store, { redisUrl, redisPrefix = 'y', persistWorker } = {}) {
+    const { enableAwareness } = this.configuration
     const [client, subscriber] = await promise.all([
-      api.createApiClient(store, { redisUrl, redisPrefix }),
-      createSubscriber(store, { redisUrl, redisPrefix })
+      api.createApiClient(store, { redisUrl, redisPrefix, enableAwareness }),
+      createSubscriber(store, { redisUrl, redisPrefix, enableAwareness })
     ])
     this.client = client
     this.subscriber = subscriber
@@ -243,7 +249,9 @@ export class YSocketIO {
       this.streamNamespaceMap.set(stream, namespace)
 
       this.initSyncListeners(socket)
-      this.initAwarenessListeners(socket)
+      if (this.configuration.enableAwareness) {
+        this.initAwarenessListeners(socket)
+      }
       this.initSocketListeners(socket)
       ;(async () => {
         assert(this.client)
@@ -404,7 +412,7 @@ export class YSocketIO {
           .catch(console.error)
       }
     )
-    if (doc.awareness.states.size > 0) {
+    if (this.configuration.enableAwareness && doc.awareness && doc.awareness.states.size > 0) {
       socket.emit(
         'awareness-update',
         AwarenessProtocol.encodeAwarenessUpdate(
@@ -436,7 +444,7 @@ export class YSocketIO {
 
     for (const m of messages) {
       const decoded = this.fromRedis(m)
-      if (decoded.type === 'awareness-update') awareness.push(decoded.message)
+      if (decoded.type === 'awareness-update' && this.configuration.enableAwareness) awareness.push(decoded.message)
       else updates.push(decoded.message)
     }
 
@@ -462,9 +470,11 @@ export class YSocketIO {
           if (msg.length === 0) continue
           Y.applyUpdate(existDoc.ydoc, msg)
         }
-        for (const msg of awareness) {
-          if (msg.length === 0) continue
-          AwarenessProtocol.applyAwarenessUpdate(existDoc.awareness, msg, null)
+        if (existDoc.awareness) {
+          for (const msg of awareness) {
+            if (msg.length === 0) continue
+            AwarenessProtocol.applyAwarenessUpdate(existDoc.awareness, msg, null)
+          }
         }
       })
     }

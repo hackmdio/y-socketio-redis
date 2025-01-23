@@ -32,7 +32,7 @@ const run = async subscriber => {
 
 /**
  * @param {import('./storage.js').AbstractStorage} store
- * @param {{ redisPrefix?: string, redisUrl?: string }} opts
+ * @param {{ redisPrefix?: string, redisUrl?: string, enableAwareness?: boolean }} opts
  */
 export const createSubscriber = async (store, opts) => {
   const client = await api.createApiClient(store, opts)

@@ -84,10 +84,10 @@ const decodeRedisRoomStreamName = (rediskey, expectedPrefix) => {
 
 /**
  * @param {import('./storage.js').AbstractStorage} store
- * @param {{ redisPrefix?: string, redisUrl?: string }} opts
+ * @param {{ redisPrefix?: string, redisUrl?: string, enableAwareness?: boolean }} opts
  */
-export const createApiClient = async (store, { redisPrefix, redisUrl }) => {
-  const a = new Api(store, redisPrefix, redisUrl)
+export const createApiClient = async (store, { redisPrefix, redisUrl, enableAwareness = true }) => {
+  const a = new Api(store, redisPrefix, redisUrl, { enableAwareness })
   await a.redis.connect()
   try {
     await a.redis.xGroupCreate(a.redisWorkerStreamName, a.redisWorkerGroupName, '0', { MKSTREAM: true })
@@ -100,10 +100,13 @@ export class Api {
    * @param {import('./storage.js').AbstractStorage} store
    * @param {string=} prefix
    * @param {string=} url
+   * @param {Object} opts
+   * @param {boolean=} opts.enableAwareness
    */
-  constructor (store, prefix = 'y', url = env.ensureConf('ysr-redis')) {
+  constructor (store, prefix = 'y', url = env.ensureConf('ysr-redis'), { enableAwareness = true } = {}) {
     this.store = store
     this.prefix = prefix
+    this.enableAwareness = enableAwareness
     this.consumername = random.uuidv4()
     /**
      * After this timeout, a new worker will pick up the task
@@ -240,8 +243,11 @@ export class Api {
     if (docMessages?.messages) logApi(`processing messages of length: ${docMessages?.messages.length} in room: ${room}`)
     const docstate = await this.store.retrieveDoc(room, docid)
     const ydoc = new Y.Doc()
-    const awareness = new awarenessProtocol.Awareness(ydoc)
-    awareness.setLocalState(null) // we don't want to propagate awareness state
+    let awareness = null
+    if (this.enableAwareness) {
+      awareness = new awarenessProtocol.Awareness(ydoc)
+      awareness.setLocalState(null) // we don't want to propagate awareness state
+    }
     const now = performance.now()
     if (docstate) { Y.applyUpdateV2(ydoc, docstate.doc) }
     let changed = false
@@ -257,7 +263,9 @@ export class Api {
             break
           }
           case 1: { // awareness message
-            awarenessProtocol.applyAwarenessUpdate(awareness, decoding.readVarUint8Array(decoder), null)
+            if (this.enableAwareness && awareness) {
+              awarenessProtocol.applyAwarenessUpdate(awareness, decoding.readVarUint8Array(decoder), null)
+            }
             break
           }
         }
@@ -394,7 +402,7 @@ export class Api {
 
 /**
  * @param {import('./storage.js').AbstractStorage} store
- * @param {{ redisPrefix?: string, redisUrl?: string }} opts
+ * @param {{ redisPrefix?: string, redisUrl?: string, enableAwareness?: boolean }} opts
  */
 export const createWorker = async (store, opts) => {
   const a = await createApiClient(store, opts)
