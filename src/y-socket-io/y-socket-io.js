@@ -470,9 +470,11 @@ export class YSocketIO {
           if (msg.length === 0) continue
           Y.applyUpdate(existDoc.ydoc, msg)
         }
-        for (const msg of awareness) {
-          if (msg.length === 0) continue
-          AwarenessProtocol.applyAwarenessUpdate(existDoc.awareness, msg, null)
+        if (existDoc.awareness) {
+          for (const msg of awareness) {
+            if (msg.length === 0) continue
+            AwarenessProtocol.applyAwarenessUpdate(existDoc.awareness, msg, null)
+          }
         }
       })
     }
