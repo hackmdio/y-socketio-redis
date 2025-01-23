@@ -15,6 +15,7 @@
     "test-db": "docker-compose -f ./docker-compose.test.yaml up",
     "dist": "tsup",
     "lint": "standard && tsc",
+    "lint:fix": "standard --fix && tsc",
     "test": "dotenvx run --env-file=.env -- node tests/index.js",
     "test-inspect": "dotenvx run --env-file=.env -- node --inspect-brk tests/index.js",
     "preversion": "npm run lint && npm run dist",
@@ -65,6 +66,7 @@
     "redis": "^4.6.12",
     "socket.io": "^4.7.5",
     "socket.io-client": "^4.8.0",
+    "toobusy-js": "^0.5.1",
     "y-protocols": "^1.0.6",
     "yjs": "^13.6.18"
   },
@@ -80,6 +82,7 @@
     "@dotenvx/dotenvx": "^1.14.0",
     "@redis/client": "^1.6.0",
     "@types/node": "^20.11.5",
+    "@types/toobusy-js": "^0.5.4",
     "@types/ws": "^8.5.10",
     "concurrently": "^8.2.2",
     "standard": "^17.1.0",

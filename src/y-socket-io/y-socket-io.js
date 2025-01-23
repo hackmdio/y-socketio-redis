@@ -4,10 +4,29 @@ import * as promise from 'lib0/promise'
 import * as encoding from 'lib0/encoding'
 import * as decoding from 'lib0/decoding'
 import { assert } from 'lib0/testing'
-import { User } from './user.js'
 import * as api from '../api.js'
 import * as protocol from '../protocol.js'
+import * as number from 'lib0/number'
+import * as env from 'lib0/environment'
 import { createSubscriber } from '../subscriber.js'
+import { isDeepStrictEqual } from 'util'
+import { User } from './user.js'
+import { createModuleLogger } from 'lib0/logging'
+import toobusy from 'toobusy-js'
+import { promiseWithResolvers } from './utils.js'
+
+const logSocketIO = createModuleLogger('@y/socket-io/server')
+const PERSIST_INTERVAL = number.parseInt(env.getConf('y-socket-io-server-persist-interval') || '3000')
+const MAX_PERSIST_INTERVAL = number.parseInt(env.getConf('y-socket-io-server-max-persist-interval') || '30000')
+const REVALIDATE_TIMEOUT = number.parseInt(env.getConf('y-socket-io-server-revalidate-timeout') || '60000')
+const WORKER_DISABLED = env.getConf('y-worker-disabled') === 'true'
+const DEFAULT_CLEAR_TIMEOUT = number.parseInt(env.getConf('y-socket-io-default-clear-timeout') || '30000')
+
+process.on('SIGINT', function () {
+  // calling .shutdown allows your process to exit normally
+  toobusy.shutdown()
+  process.exit()
+})
 
 /**
  * @typedef {import('socket.io').Namespace} Namespace
@@ -89,6 +108,48 @@ export class YSocketIO {
    * @readonly
    */
   namespaceMap = new Map()
+  /**
+   * @type {Map<string, RedisDoc>}
+   * @private
+   * @readonly
+   */
+  namespaceDocMap = new Map()
+  /**
+   * @type {Map<Socket, { user: UserLike, validatedAt: number }>}
+   * @private
+   * @readonly
+   */
+  socketUserCache = new Map()
+  /**
+   * @type {Map<string, NodeJS.Timeout | null>}
+   * @private
+   * @readonly
+   */
+  debouncedPersistMap = new Map()
+  /**
+   * @type {Map<string, Y.Doc>}
+   * @private
+   * @readonly
+   */
+  debouncedPersistDocMap = new Map()
+  /**
+   * @type {Map<string, number>}
+   * @private
+   * @readonly
+   */
+  namespacePersistentMap = new Map()
+  /**
+   * @type {Map<string, { promise: Promise<void>, resolve: () => void }>}
+   * @private
+   * @readonly
+   */
+  awaitingPersistMap = new Map()
+  /**
+   * @type {Map<string, NodeJS.Timeout>}
+   * @private
+   * @readonly
+   */
+  awaitingCleanupNamespace = new Map()
 
   /**
    * YSocketIO constructor.
@@ -109,39 +170,67 @@ export class YSocketIO {
    *
    *  It also starts socket connection listeners.
    * @param {import('../storage.js').AbstractStorage} store
-   * @param {{ redisPrefix?: string, redisUrl?: string }=} opts
+   * @param {{ redisPrefix?: string, redisUrl?: string, persistWorker?: import('worker_threads').Worker }=} opts
    * @public
    */
-  async initialize (store, { redisUrl, redisPrefix = 'y' } = {}) {
+  async initialize (store, { redisUrl, redisPrefix = 'y', persistWorker } = {}) {
     const [client, subscriber] = await promise.all([
       api.createApiClient(store, { redisUrl, redisPrefix }),
       createSubscriber(store, { redisUrl, redisPrefix })
     ])
     this.client = client
     this.subscriber = subscriber
+    if (persistWorker) {
+      this.client.persistWorker = persistWorker
+      this.registerPersistWorkerResolve()
+    }
 
     this.nsp = this.io.of(/^\/yjs\|.*$/)
 
     this.nsp.use(async (socket, next) => {
-      if (this.configuration.authenticate == null) return next()
-      const user = await this.configuration.authenticate(socket)
-      if (user) {
-        socket.user = new User(this.getNamespaceString(socket.nsp), user.userid)
-        return next()
-      } else return next(new Error('Unauthorized'))
+      if (this.configuration.authenticate === null) return next()
+      const userCache = this.socketUserCache.get(socket)
+      const namespace = this.getNamespaceString(socket.nsp)
+      if (!userCache || Date.now() - userCache.validatedAt > REVALIDATE_TIMEOUT) {
+        this.socketUserCache.delete(socket)
+        const user = await this.configuration.authenticate(socket)
+        if (!user) return next(new Error('Unauthorized'))
+        this.socketUserCache.set(socket, { user, validatedAt: Date.now() })
+        socket.user = new User(namespace, user.userid)
+      } else {
+        socket.user = new User(namespace, userCache.user.userid)
+      }
+
+      if (socket.user) return next()
+      else return next(new Error('Unauthorized'))
     })
 
     this.nsp.on('connection', async (socket) => {
       assert(this.client)
       assert(this.subscriber)
+      const namespace = this.getNamespaceString(socket.nsp)
+      if (toobusy()) {
+        logSocketIO(`warning server too busy, rejecting connection: ${namespace}`)
+        // wait a bit to prevent client reconnect too fast
+        await promise.wait(100)
+        socket.send('server too busy, please try again latter')
+        socket.disconnect(true)
+        return
+      }
       if (!socket.user) throw new Error('user does not exist in socket')
 
-      const namespace = this.getNamespaceString(socket.nsp)
+      logSocketIO(`new connection in namespace: ${namespace}`)
       const stream = api.computeRedisRoomStreamName(
         namespace,
         'index',
         redisPrefix
       )
+      const prevAwaitCleanup = this.awaitingCleanupNamespace.get(namespace)
+      if (prevAwaitCleanup) {
+        clearTimeout(prevAwaitCleanup)
+        this.cleanupNamespace(namespace, stream)
+      }
+
       if (!this.namespaceMap.has(namespace)) {
         this.namespaceMap.set(namespace, socket.nsp)
       }
@@ -156,17 +245,21 @@ export class YSocketIO {
       this.initSyncListeners(socket)
       this.initAwarenessListeners(socket)
       this.initSocketListeners(socket)
+      ;(async () => {
+        assert(this.client)
+        assert(socket.user)
+        const doc = (WORKER_DISABLED && this.namespaceDocMap.get(namespace)) || (await this.client.getDoc(namespace, 'index'))
+        if (WORKER_DISABLED) this.namespaceDocMap.set(namespace, doc)
 
-      const doc = await this.client.getDoc(namespace, 'index')
-
-      if (
-        api.isSmallerRedisId(doc.redisLastId, socket.user.initialRedisSubId)
-      ) {
-        // our subscription is newer than the content that we received from the api
-        // need to renew subscription id and make sure that we catch the latest content.
-        this.subscriber.ensureSubId(stream, doc.redisLastId)
-      }
-      this.startSynchronization(socket, doc)
+        if (
+          api.isSmallerRedisId(doc.redisLastId, socket.user.initialRedisSubId)
+        ) {
+          // our subscription is newer than the content that we received from the api
+          // need to renew subscription id and make sure that we catch the latest content.
+          this.subscriber?.ensureSubId(stream, doc.redisLastId)
+        }
+        this.startSynchronization(socket, doc)
+      })()
     })
 
     return { client, subscriber }
@@ -200,22 +293,29 @@ export class YSocketIO {
         syncStep2
       ) => {
         assert(this.client)
-        const doc = await this.client.getDoc(
-          this.getNamespaceString(socket.nsp),
-          'index'
-        )
+        const namespace = this.getNamespaceString(socket.nsp)
+        const doc = (WORKER_DISABLED && this.namespaceDocMap.get(namespace)) || (await this.client.getDoc(namespace, 'index'))
+        if (WORKER_DISABLED) this.namespaceDocMap.set(namespace, doc)
+        assert(doc)
         syncStep2(Y.encodeStateAsUpdate(doc.ydoc, stateVector))
       }
     )
 
+    /** @type {unknown} */
+    let prevMsg = null
     socket.on('sync-update', (/** @type {ArrayBuffer} */ update) => {
+      if (isDeepStrictEqual(update, prevMsg)) return
       assert(this.client)
+      const namespace = this.getNamespaceString(socket.nsp)
       const message = Buffer.from(update.slice(0, update.byteLength))
-      this.client.addMessage(
-        this.getNamespaceString(socket.nsp),
-        'index',
-        Buffer.from(this.toRedis('sync-update', message))
-      ).catch(console.error)
+      this.client
+        .addMessage(
+          namespace,
+          'index',
+          Buffer.from(this.toRedis('sync-update', message))
+        )
+        .catch(console.error)
+      prevMsg = update
     })
   }
 
@@ -232,14 +332,19 @@ export class YSocketIO {
    * @readonly
    */
   initAwarenessListeners = (socket) => {
+    /** @type {unknown} */
+    const prevMsg = null
     socket.on('awareness-update', (/** @type {ArrayBuffer} */ update) => {
+      if (isDeepStrictEqual(update, prevMsg)) return
       assert(this.client)
       const message = Buffer.from(update.slice(0, update.byteLength))
-      this.client.addMessage(
-        this.getNamespaceString(socket.nsp),
-        'index',
-        Buffer.from(this.toRedis('awareness-update', new Uint8Array(message)))
-      ).catch(console.error)
+      this.client
+        .addMessage(
+          this.getNamespaceString(socket.nsp),
+          'index',
+          Buffer.from(this.toRedis('awareness-update', new Uint8Array(message)))
+        )
+        .catch(console.error)
     })
   }
 
@@ -253,16 +358,26 @@ export class YSocketIO {
     socket.on('disconnect', async () => {
       assert(this.subscriber)
       if (!socket.user) return
-      for (const ns of socket.user.subs) {
-        const stream = this.namespaceStreamMap.get(ns)
+      this.socketUserCache.delete(socket)
+      for (const stream of socket.user.subs) {
+        const ns = this.streamNamespaceMap.get(stream)
+        if (!ns) continue
         const nsp = this.namespaceMap.get(ns)
         if (nsp?.sockets.size === 0 && stream) {
-          this.subscriber.unsubscribe(stream, this.redisMessageSubscriber)
-          this.namespaceStreamMap.delete(ns)
-          this.streamNamespaceMap.delete(stream)
-          this.namespaceMap.delete(ns)
+          this.cleanupNamespace(ns, stream, DEFAULT_CLEAR_TIMEOUT)
+          const doc = this.namespaceDocMap.get(ns)
+          if (doc) this.debouncedPersist(ns, doc.ydoc, true)
         }
       }
+    })
+    socket.onAnyOutgoing(async (ev) => {
+      if (ev !== 'reload') return
+      if (!WORKER_DISABLED) return
+      const namespace = this.getNamespaceString(socket.nsp)
+      logSocketIO(`reload event triggered, updating namespace doc in: ${namespace}`)
+      assert(this.client)
+      const doc = await this.client.getDoc(namespace, 'index')
+      this.namespaceDocMap.set(namespace, doc)
     })
   }
 
@@ -280,11 +395,13 @@ export class YSocketIO {
       (/** @type {Uint8Array} */ update) => {
         assert(this.client)
         const message = Buffer.from(update.slice(0, update.byteLength))
-        this.client.addMessage(
-          this.getNamespaceString(socket.nsp),
-          'index',
-          Buffer.from(this.toRedis('sync-step-2', message))
-        ).catch(console.error)
+        this.client
+          .addMessage(
+            this.getNamespaceString(socket.nsp),
+            'index',
+            Buffer.from(this.toRedis('sync-step-2', message))
+          )
+          .catch(console.error)
       }
     )
     if (doc.awareness.states.size > 0) {
@@ -303,16 +420,13 @@ export class YSocketIO {
    * @param {string} stream
    * @param {Array<Uint8Array>} messages
    */
-  redisMessageSubscriber = (stream, messages) => {
+  redisMessageSubscriber = async (stream, messages) => {
     const namespace = this.streamNamespaceMap.get(stream)
     if (!namespace) return
     const nsp = this.namespaceMap.get(namespace)
     if (!nsp) return
     if (nsp.sockets.size === 0 && this.subscriber) {
-      this.subscriber.unsubscribe(stream, this.redisMessageSubscriber)
-      this.namespaceStreamMap.delete(namespace)
-      this.streamNamespaceMap.delete(stream)
-      this.namespaceMap.delete(namespace)
+      this.cleanupNamespace(namespace, stream, DEFAULT_CLEAR_TIMEOUT)
     }
 
     /** @type {Uint8Array[]} */
@@ -334,6 +448,96 @@ export class YSocketIO {
       if (msg.length === 0) continue
       nsp.emit('awareness-update', msg)
     }
+
+    if (!WORKER_DISABLED) return
+
+    let changed = false
+    const existDoc = this.namespaceDocMap.get(namespace)
+    if (existDoc) {
+      existDoc.ydoc.on('afterTransaction', (tr) => {
+        changed = tr.changed.size > 0
+      })
+      Y.transact(existDoc.ydoc, () => {
+        for (const msg of updates) {
+          if (msg.length === 0) continue
+          Y.applyUpdate(existDoc.ydoc, msg)
+        }
+        for (const msg of awareness) {
+          if (msg.length === 0) continue
+          AwarenessProtocol.applyAwarenessUpdate(existDoc.awareness, msg, null)
+        }
+      })
+    }
+
+    assert(this.client)
+    let doc = existDoc
+    if (!existDoc) {
+      const getDoc = await this.client.getDoc(namespace, 'index')
+      doc = getDoc
+      changed = getDoc.changed
+    }
+    assert(doc)
+    const lastPersistCalledAt = this.namespacePersistentMap.get(namespace) ?? 0
+    const now = Date.now()
+    const shouldPersist = now - lastPersistCalledAt > MAX_PERSIST_INTERVAL
+    if (changed || shouldPersist || nsp.sockets.size === 0) {
+      this.namespacePersistentMap.set(namespace, now)
+      this.debouncedPersist(namespace, doc.ydoc, nsp.sockets.size === 0)
+    }
+    this.namespaceDocMap.get(namespace)?.ydoc.destroy()
+    this.namespaceDocMap.set(namespace, doc)
+  }
+
+  /**
+   * @param {string} namespace
+   * @param {Y.Doc} doc
+   * @param {boolean=} immediate
+   */
+  debouncedPersist (namespace, doc, immediate = false) {
+    this.debouncedPersistDocMap.set(namespace, doc)
+    if (this.debouncedPersistMap.has(namespace)) {
+      if (!immediate) return
+      clearTimeout(this.debouncedPersistMap.get(namespace) || undefined)
+    }
+    const timeoutInterval = immediate
+      ? 0
+      : PERSIST_INTERVAL + (Math.random() - 0.5) * PERSIST_INTERVAL
+    const timeout = setTimeout(
+      async () => {
+        try {
+          assert(this.client)
+          const doc = this.debouncedPersistDocMap.get(namespace)
+          logSocketIO(`trying to persist ${namespace}`)
+          if (!doc) return
+          if (this.client.persistWorker) {
+            /** @type {ReturnType<typeof promiseWithResolvers<void>>} */
+            const { promise, resolve } = promiseWithResolvers()
+            assert(this.client?.persistWorker)
+            this.awaitingPersistMap.set(namespace, { promise, resolve })
+
+            const docState = Y.encodeStateAsUpdateV2(doc)
+            const buf = new Uint8Array(new SharedArrayBuffer(docState.length))
+            buf.set(docState)
+            this.client.persistWorker.postMessage({
+              room: namespace,
+              docstate: buf
+            })
+            await promise
+          } else {
+            await this.client.store.persistDoc(namespace, 'index', doc)
+          }
+          await this.client.trimRoomStream(namespace, 'index')
+        } catch (e) {
+          console.error(e)
+        } finally {
+          this.debouncedPersistDocMap.delete(namespace)
+          this.debouncedPersistMap.delete(namespace)
+        }
+      },
+      timeoutInterval
+    )
+
+    this.debouncedPersistMap.set(namespace, timeout)
   }
 
   /**
@@ -419,5 +623,50 @@ export class YSocketIO {
     } catch (e) {
       console.error(e)
     }
+  }
+
+  registerPersistWorkerResolve () {
+    if (!this.client?.persistWorker) return
+    this.client.persistWorker.on('message', ({ event, room }) => {
+      if (event === 'persisted') this.awaitingPersistMap.get(room)?.resolve()
+    })
+  }
+
+  /**
+   * @param {string} namespace
+   * @param {string} stream
+   * @param {number=} removeAfterWait
+   */
+  cleanupNamespace (namespace, stream, removeAfterWait) {
+    if (!removeAfterWait) {
+      this.awaitingCleanupNamespace.delete(namespace)
+      return this.cleanupNamespaceImpl(namespace, stream)
+    }
+    if (this.awaitingCleanupNamespace.has(namespace)) return
+
+    const timer = setTimeout(async () => {
+      const awaitingPersist = this.awaitingPersistMap.get(namespace)
+      if (awaitingPersist) await awaitingPersist.promise
+      this.cleanupNamespaceImpl(namespace, stream)
+      this.awaitingCleanupNamespace.delete(namespace)
+      logSocketIO(`no active connection, namespace: ${namespace} cleared`)
+    }, removeAfterWait)
+    this.awaitingCleanupNamespace.set(namespace, timer)
+  }
+
+  /**
+   * @param {string} namespace
+   * @param {string} stream
+   * @private
+   */
+  cleanupNamespaceImpl (namespace, stream) {
+    this.subscriber?.unsubscribe(stream, this.redisMessageSubscriber)
+    this.namespaceStreamMap.delete(namespace)
+    this.streamNamespaceMap.delete(stream)
+    this.namespaceMap.delete(namespace)
+    this.namespaceDocMap.get(namespace)?.ydoc.destroy()
+    this.namespaceDocMap.delete(namespace)
+    this.namespacePersistentMap.delete(namespace)
+    this.client?.trimRoomStream(namespace, 'index', true)
   }
 }
