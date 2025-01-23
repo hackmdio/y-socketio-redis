@@ -370,6 +370,15 @@ export class YSocketIO {
         }
       }
     })
+    socket.onAnyOutgoing(async (ev) => {
+      if (ev !== 'reload') return
+      if (!WORKER_DISABLED) return
+      const namespace = this.getNamespaceString(socket.nsp)
+      logSocketIO(`reload event triggered, updating namespace doc in: ${namespace}`)
+      assert(this.client)
+      const doc = await this.client.getDoc(namespace, 'index')
+      this.namespaceDocMap.set(namespace, doc)
+    })
   }
 
   /**
