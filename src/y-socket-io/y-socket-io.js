@@ -211,7 +211,11 @@ export class YSocketIO {
       const namespace = this.getNamespaceString(socket.nsp)
       if (toobusy()) {
         logSocketIO(`warning server too busy, rejecting connection: ${namespace}`)
-        throw new Error('server too busy, please try again latter')
+        // wait a bit to prevent client reconnect too fast
+        await promise.wait(100)
+        socket.send('server too busy, please try again latter')
+        socket.disconnect(true)
+        return
       }
       if (!socket.user) throw new Error('user does not exist in socket')
 

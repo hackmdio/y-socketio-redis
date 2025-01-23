@@ -351,6 +351,8 @@ export class SocketIOProvider extends Observable {
    * @readonly
    */
   onSocketDisconnection = (event) => {
+    if (event === 'io server disconnect') this.socket.connect()
+
     this.emit('connection-close', [event, this])
     this.synced = false
     AwarenessProtocol.removeAwarenessStates(
