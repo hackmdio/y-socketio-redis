@@ -157,7 +157,7 @@ export class SocketIOProvider extends Observable {
 
     this.doc.on('update', this.onUpdateDoc)
 
-    this.socket.on('connect', () => this.onSocketConnection(resyncInterval))
+    this.socket.once('ready-for-sync', () => this.onSocketConnection(resyncInterval))
 
     this.socket.on('disconnect', (event) => this.onSocketDisconnection(event))
 

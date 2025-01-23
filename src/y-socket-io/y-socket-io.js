@@ -91,6 +91,12 @@ export class YSocketIO {
   namespaceMap = new Map()
 
   /**
+   * @type {Promise<void>[]}
+   * @private
+   */
+  syncQueue = []
+
+  /**
    * YSocketIO constructor.
    * @constructor
    * @param {Server} io Server instance from Socket IO
@@ -157,16 +163,27 @@ export class YSocketIO {
       this.initAwarenessListeners(socket)
       this.initSocketListeners(socket)
 
-      const doc = await this.client.getDoc(namespace, 'index')
-
-      if (
-        api.isSmallerRedisId(doc.redisLastId, socket.user.initialRedisSubId)
-      ) {
-        // our subscription is newer than the content that we received from the api
-        // need to renew subscription id and make sure that we catch the latest content.
-        this.subscriber.ensureSubId(stream, doc.redisLastId)
-      }
-      this.startSynchronization(socket, doc)
+      /**
+       * @type {Promise<void>}
+       */
+      const task = new Promise((resolve) => {
+        assert(this.client)
+        this.client.getDoc(namespace, 'index').then((doc) => {
+          assert(socket.user)
+          assert(this.subscriber)
+          socket.emit('ready-for-sync')
+          if (
+            api.isSmallerRedisId(doc.redisLastId, socket.user.initialRedisSubId)
+          ) {
+            // our subscription is newer than the content that we received from the api
+            // need to renew subscription id and make sure that we catch the latest content.
+            this.subscriber.ensureSubId(stream, doc.redisLastId)
+          }
+          this.startSynchronization(socket, doc)
+          resolve()
+        })
+      })
+      this.queueUpSyncTask(task)
     })
 
     return { client, subscriber }
@@ -334,6 +351,25 @@ export class YSocketIO {
       if (msg.length === 0) continue
       nsp.emit('awareness-update', msg)
     }
+  }
+
+  /**
+   * @private
+   * @param {Promise<void>} task
+   */
+  queueUpSyncTask (task) {
+    const len = this.syncQueue.push(task)
+    if (len === 1) this.consumeSyncQueue()
+  }
+
+  /**
+   * @private
+   */
+  async consumeSyncQueue () {
+    if (this.syncQueue.length === 0) return
+    const task = this.syncQueue.shift()
+    await task
+    this.consumeSyncQueue()
   }
 
   /**
