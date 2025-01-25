@@ -304,10 +304,7 @@ export class Api {
     const roomName = computeRedisRoomStreamName(room, docid, this.prefix)
     const redisLastId = await this.getRedisLastId(room, docid)
     const lastId = number.parseInt(redisLastId.split('-')[0])
-    await this.redis.multi()
-      .xTrim(roomName, 'MINID', lastId - this.redisMinMessageLifetime)
-      .xDelIfEmpty(roomName)
-      .exec()
+    await this.redis.xTrim(roomName, 'MINID', lastId - this.redisMinMessageLifetime)
   }
 
   /**
