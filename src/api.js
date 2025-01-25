@@ -300,6 +300,8 @@ export class Api {
     const roomName = computeRedisRoomStreamName(room, docid, this.prefix)
     const redisLastId = await this.getRedisLastId(room, docid)
     const lastId = number.parseInt(redisLastId.split('-')[0])
+    const roomExists = await this.redis.exists(roomName)
+    if (!roomExists) return
     if (remove) {
       await this.redis.del(roomName)
     } else {
