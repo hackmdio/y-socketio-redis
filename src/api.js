@@ -20,6 +20,7 @@ if (ydocUpdateCallback != null && ydocUpdateCallback.slice(-1) !== '/') {
   ydocUpdateCallback += '/'
 }
 const WORKER_DISABLED = env.getConf('y-worker-disabled') === 'true'
+const ROOM_STREAM_TTL = number.parseInt(env.getConf('y-room-stream-ttl') || '300')
 
 /**
  * @param {string} a
@@ -125,7 +126,10 @@ export class Api {
     this.persistWorker = null
 
     const addScript = WORKER_DISABLED
-      ? 'redis.call("XADD", KEYS[1], "*", "m", ARGV[1])'
+      ? `
+          redis.call("XADD", KEYS[1], "*", "m", ARGV[1])
+          redis.call("EXPIRE", KEYS[1], ${ROOM_STREAM_TTL})
+        `
       : `
           if redis.call("EXISTS", KEYS[1]) == 0 then
             redis.call("XADD", "${this.redisWorkerStreamName}", "*", "compact", KEYS[1])
@@ -133,6 +137,7 @@ export class Api {
             redis.call("SADD", "${this.prefix}:worker:checklist", KEYS[1])
           end
           redis.call("XADD", KEYS[1], "*", "m", ARGV[1])
+          redis.call("EXPIRE", KEYS[1], ${ROOM_STREAM_TTL})
         `
 
     this.redis = redis.createClient({
@@ -294,20 +299,15 @@ export class Api {
   /**
    * @param {string} room
    * @param {string} docid
-   * @param {boolean} [remove=false]
    */
-  async trimRoomStream (room, docid, remove = false) {
+  async trimRoomStream (room, docid) {
     const roomName = computeRedisRoomStreamName(room, docid, this.prefix)
     const redisLastId = await this.getRedisLastId(room, docid)
     const lastId = number.parseInt(redisLastId.split('-')[0])
-    if (remove) {
-      await this.redis.del(roomName)
-    } else {
-      await this.redis.multi()
-        .xTrim(roomName, 'MINID', lastId - this.redisMinMessageLifetime)
-        .xDelIfEmpty(roomName)
-        .exec()
-    }
+    await this.redis.multi()
+      .xTrim(roomName, 'MINID', lastId - this.redisMinMessageLifetime)
+      .xDelIfEmpty(roomName)
+      .exec()
   }
 
   /**

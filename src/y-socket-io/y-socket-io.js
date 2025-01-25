@@ -687,6 +687,5 @@ export class YSocketIO {
     this.namespaceDocMap.get(namespace)?.ydoc.destroy()
     this.namespaceDocMap.delete(namespace)
     this.namespacePersistentMap.delete(namespace)
-    this.client?.trimRoomStream(namespace, 'index', true)
   }
 }
