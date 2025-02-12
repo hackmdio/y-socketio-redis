@@ -18,7 +18,11 @@ export class PersistWorkerThread {
       return
     }
     this.store = store
-    parentPort?.on('message', this.persist)
+    parentPort?.postMessage({ event: 'ready' })
+    parentPort?.on('message', ({ event, ...rest }) => {
+      if (event === 'ping') parentPort?.postMessage({ event: 'pong' })
+      else this.persist(rest)
+    })
   }
 
   /**
