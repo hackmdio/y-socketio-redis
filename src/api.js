@@ -122,8 +122,6 @@ export class Api {
     this.redisWorkerGroupName = this.prefix + ':worker'
     this.workerSetName = `${this.prefix}:worker:${this.consumername}:idset`
     this._destroyed = false
-    /** @type {import('worker_threads').Worker | null} */
-    this.persistWorker = null
 
     const addScript = WORKER_DISABLED
       ? `
