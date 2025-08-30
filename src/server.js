@@ -50,8 +50,12 @@ export const createYSocketIOServer = async ({
     }
   })
 
-  httpServer.listen(port, undefined, undefined, () => {
-    logging.print(logging.GREEN, '[y-redis] Listening to port ', port)
-  })
+  httpServer.listen(port, undefined, undefined)
+
+  const oriDestroy = server.destroy
+  server.destroy = async () => {
+    await oriDestroy.bind(server)()
+    await new Promise((resolve) => httpServer.close(resolve))
+  }
   return server
 }
