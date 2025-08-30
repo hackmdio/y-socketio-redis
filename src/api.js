@@ -97,6 +97,8 @@ export const createApiClient = async (store, { redisPrefix, redisUrl, enableAwar
 }
 
 export class Api {
+  /** @type {import('@redis/client').RedisClientType<any, any, any> & { addMessage: (key: string, message: Buffer) => Promise<any>, xDelIfEmpty: (key: string) => Promise<any> }} */
+  redis
   /**
    * @param {import('./storage.js').AbstractStorage} store
    * @param {string=} prefix
@@ -138,6 +140,7 @@ export class Api {
           redis.call("EXPIRE", KEYS[1], ${ROOM_STREAM_TTL})
         `
 
+    /** @type {import('@redis/client').RedisClientType & { addMessage: (key: string, message: Buffer) => Promise<any>, xDelIfEmpty: (key: string) => Promise<any> }} */
     this.redis = redis.createClient({
       url,
       // scripting: https://github.com/redis/node-redis/#lua-scripts
@@ -339,6 +342,7 @@ export class Api {
       const streamlen = await this.redis.xLen(task.stream)
       if (streamlen === 0) {
         await this.redis.multi()
+          // @ts-expect-error custom script on multi
           .xDelIfEmpty(task.stream)
           .xAck(this.redisWorkerStreamName, this.redisWorkerGroupName, task.id)
           .xDel(this.redisWorkerStreamName, task.id)
@@ -370,6 +374,7 @@ export class Api {
             // call YDOC_UPDATE_CALLBACK here
             const formData = new FormData()
             // @todo only convert ydoc to updatev2 once
+            // @ts-ignore
             formData.append('ydoc', new Blob([Y.encodeStateAsUpdateV2(ydoc)]))
             // @todo should add a timeout to fetch (see fetch signal abortcontroller)
             const res = await fetch(new URL(room, ydocUpdateCallback), { body: formData, method: 'PUT' })
