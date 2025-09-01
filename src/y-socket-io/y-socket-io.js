@@ -14,6 +14,7 @@ import { User } from './user.js'
 import { createModuleLogger } from 'lib0/logging'
 import toobusy from 'toobusy-js'
 import { promiseWithResolvers } from './utils.js'
+import { ClientClosedError } from 'redis'
 
 const logSocketIO = createModuleLogger('@y/socket-io/server')
 const PERSIST_INTERVAL = number.parseInt(env.getConf('y-socket-io-server-persist-interval') || '3000')
@@ -22,6 +23,7 @@ const REVALIDATE_TIMEOUT = number.parseInt(env.getConf('y-socket-io-server-reval
 const WORKER_DISABLED = env.getConf('y-worker-disabled') === 'true'
 const DEFAULT_CLEAR_TIMEOUT = number.parseInt(env.getConf('y-socket-io-default-clear-timeout') || '30000')
 const WORKER_HEALTH_CHECK_INTERVAL = number.parseInt(env.getConf('y-socket-io-worker-health-check-interval') || '5000')
+const NEVER_REJECT_CONNECTION = env.getConf('y-socket-io-never-reject-connection') === 'true'
 
 process.on('SIGINT', function () {
   // calling .shutdown allows your process to exit normally
@@ -232,7 +234,7 @@ export class YSocketIO {
       assert(this.client)
       assert(this.subscriber)
       const namespace = this.getNamespaceString(socket.nsp)
-      if (toobusy()) {
+      if (!NEVER_REJECT_CONNECTION && toobusy()) {
         logSocketIO(`warning server too busy, rejecting connection: ${namespace}`)
         // wait a bit to prevent client reconnect too fast
         await promise.wait(100)
@@ -392,6 +394,7 @@ export class YSocketIO {
           this.cleanupNamespace(ns, stream, DEFAULT_CLEAR_TIMEOUT)
           if (this.namespaceDocMap.has(ns)) this.debouncedPersist(ns, true)
         }
+        logSocketIO(`disconnecting socket in ${ns}, ${nsp?.sockets.size || 0} remaining`)
       }
     })
     socket.onAnyOutgoing(async (ev) => {
@@ -562,7 +565,10 @@ export class YSocketIO {
 
           await this.client.trimRoomStream(namespace, 'index')
         } catch (e) {
-          console.error(e)
+          // suppress redis client closed error
+          if (!(e instanceof ClientClosedError)) {
+            console.error(e)
+          }
         }
       },
       timeoutInterval
