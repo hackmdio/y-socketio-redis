@@ -172,7 +172,6 @@ export class SocketIOProvider extends Observable {
         ...socketIoOptions
       })
     }
-    this._socketIoOptions = socketIoOptions
 
     this.doc.on('update', this.onUpdateDoc)
 
