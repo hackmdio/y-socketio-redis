@@ -37,6 +37,9 @@ import { io } from 'socket.io-client'
  *
  *  @prop {Record<string, unknown>=} auth
  *  (Optional) Add the authentication data
+ *
+ *  @prop {ClientSocket=} socket
+ *  (Optional) Supply custom socket.io client socket. If supplied, `socketIoOptions` will be ignored.
  */
 
 /**
@@ -138,7 +141,8 @@ export class SocketIOProvider extends Observable {
       awareness = enableAwareness ? new AwarenessProtocol.Awareness(doc) : undefined,
       resyncInterval = -1,
       disableBc = false,
-      auth = {}
+      auth = {},
+      socket,
     } = {},
     socketIoOptions = undefined
   ) {
@@ -157,13 +161,17 @@ export class SocketIOProvider extends Observable {
     this.disableBc = disableBc
     this._socketIoOptions = socketIoOptions
 
-    this.socket = io(`${this.url}/yjs|${roomName}`, {
-      autoConnect: false,
-      transports: ['websocket'],
-      forceNew: true,
-      auth,
-      ...socketIoOptions
-    })
+    if (socket) {
+      this.socket = socket
+    } else {
+      this.socket = io(`${this.url}/yjs|${roomName}`, {
+        autoConnect: false,
+        transports: ['websocket'],
+        forceNew: true,
+        auth,
+        ...socketIoOptions
+      })
+    }
     this._socketIoOptions = socketIoOptions
 
     this.doc.on('update', this.onUpdateDoc)
