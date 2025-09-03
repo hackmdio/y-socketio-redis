@@ -330,8 +330,8 @@ export class YSocketIO {
 
     /** @type {unknown} */
     let prevMsg = null
-    socket.on('sync-update', (/** @type {ArrayBuffer} */ update) => {
-      if (isDeepStrictEqual(update, prevMsg)) return
+    socket.on('sync-update', (/** @type {ArrayBuffer} */ update, /** @type {() => void} */ ack) => {
+      if (isDeepStrictEqual(update, prevMsg)) return ack()
       assert(this.client)
       const namespace = this.getNamespaceString(socket.nsp)
       const message = Buffer.from(update.slice(0, update.byteLength))
@@ -341,6 +341,7 @@ export class YSocketIO {
           'index',
           Buffer.from(this.toRedis('sync-update', message))
         )
+        .then(() => ack())
         .catch(console.error)
       prevMsg = update
     })
