@@ -1,5 +1,5 @@
 import * as Y from 'yjs'
-import * as redis from 'redis'
+import { createClient, defineScript, commandOptions } from 'redis'
 import * as map from 'lib0/map'
 import * as decoding from 'lib0/decoding'
 import * as awarenessProtocol from 'y-protocols/awareness'
@@ -97,7 +97,6 @@ export const createApiClient = async (store, { redisPrefix, redisUrl, enableAwar
 }
 
 export class Api {
-  /** @type {import('@redis/client').RedisClientType<any, any, any> & { addMessage: (key: string, message: Buffer) => Promise<any>, xDelIfEmpty: (key: string) => Promise<any> }} */
   redis
   /**
    * @param {import('./storage.js').AbstractStorage} store
@@ -140,12 +139,11 @@ export class Api {
           redis.call("EXPIRE", KEYS[1], ${ROOM_STREAM_TTL})
         `
 
-    /** @type {import('@redis/client').RedisClientType & { addMessage: (key: string, message: Buffer) => Promise<any>, xDelIfEmpty: (key: string) => Promise<any> }} */
-    this.redis = redis.createClient({
+    this.redis = createClient({
       url,
       // scripting: https://github.com/redis/node-redis/#lua-scripts
       scripts: {
-        addMessage: redis.defineScript({
+        addMessage: defineScript({
           NUMBER_OF_KEYS: 1,
           SCRIPT: addScript,
           /**
@@ -162,7 +160,7 @@ export class Api {
             return x
           }
         }),
-        xDelIfEmpty: redis.defineScript({
+        xDelIfEmpty: defineScript({
           NUMBER_OF_KEYS: 1,
           SCRIPT: `
             if redis.call("XLEN", KEYS[1]) == 0 then
@@ -196,7 +194,7 @@ export class Api {
       return []
     }
     const reads = await this.redis.xRead(
-      redis.commandOptions({ returnBuffers: true }),
+      commandOptions({ returnBuffers: true }),
       streams,
       { BLOCK: 1000, COUNT: 1000 }
     )
@@ -244,7 +242,7 @@ export class Api {
    * @param {string} docid
    */
   async getDoc (room, docid) {
-    const ms = extractMessagesFromStreamReply(await this.redis.xRead(redis.commandOptions({ returnBuffers: true }), { key: computeRedisRoomStreamName(room, docid, this.prefix), id: '0' }), this.prefix)
+    const ms = extractMessagesFromStreamReply(await this.redis.xRead(commandOptions({ returnBuffers: true }), { key: computeRedisRoomStreamName(room, docid, this.prefix), id: '0' }), this.prefix)
     const docMessages = ms.get(room)?.get(docid) || null
     if (docMessages?.messages) logApi(`processing messages of length: ${docMessages?.messages.length} in room: ${room}`)
     const docstate = await this.store.retrieveDoc(room, docid)
@@ -292,7 +290,7 @@ export class Api {
    * @param {string} docid
    */
   async getRedisLastId (room, docid) {
-    const ms = extractMessagesFromStreamReply(await this.redis.xRead(redis.commandOptions({ returnBuffers: true }), { key: computeRedisRoomStreamName(room, docid, this.prefix), id: '0' }), this.prefix)
+    const ms = extractMessagesFromStreamReply(await this.redis.xRead(commandOptions({ returnBuffers: true }), { key: computeRedisRoomStreamName(room, docid, this.prefix), id: '0' }), this.prefix)
     const docMessages = ms.get(room)?.get(docid) || null
     return docMessages?.lastId.toString() || '0'
   }
@@ -342,7 +340,6 @@ export class Api {
       const streamlen = await this.redis.xLen(task.stream)
       if (streamlen === 0) {
         await this.redis.multi()
-          // @ts-expect-error custom script on multi
           .xDelIfEmpty(task.stream)
           .xAck(this.redisWorkerStreamName, this.redisWorkerGroupName, task.id)
           .xDel(this.redisWorkerStreamName, task.id)
