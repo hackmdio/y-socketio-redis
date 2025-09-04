@@ -1,5 +1,4 @@
 import * as env from 'lib0/environment'
-import * as logging from 'lib0/logging'
 import * as jwt from 'lib0/crypto/jwt'
 import * as ecdsa from 'lib0/crypto/ecdsa'
 import * as json from 'lib0/json'

@@ -142,7 +142,7 @@ export class SocketIOProvider extends Observable {
       resyncInterval = -1,
       disableBc = false,
       auth = {},
-      socket,
+      socket
     } = {},
     socketIoOptions = undefined
   ) {
@@ -442,8 +442,8 @@ export class SocketIOProvider extends Observable {
     if (origin !== this) {
       /** @type {boolean} */
       const ack = await Promise.race([
-        new Promise((res) => this.socket.emit('sync-update', update, () => res(true))),
-        new Promise((res) => setTimeout(() => res(false), 3000)),
+        new Promise((resolve) => this.socket.emit('sync-update', update, () => resolve(true))),
+        new Promise((resolve) => setTimeout(() => resolve(false), 3000))
       ])
       if (!ack) {
         this._updateRetries++
