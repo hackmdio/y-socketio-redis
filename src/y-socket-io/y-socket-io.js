@@ -15,6 +15,7 @@ import { createModuleLogger } from 'lib0/logging'
 import toobusy from 'toobusy-js'
 import { promiseWithResolvers } from './utils.js'
 import { ClientClosedError } from 'redis'
+import { randomUUID } from 'crypto'
 
 const logSocketIO = createModuleLogger('@y/socket-io/server')
 const PERSIST_INTERVAL = number.parseInt(env.getConf('y-socket-io-server-persist-interval') || '3000')
@@ -24,6 +25,7 @@ const WORKER_DISABLED = env.getConf('y-worker-disabled') === 'true'
 const DEFAULT_CLEAR_TIMEOUT = number.parseInt(env.getConf('y-socket-io-default-clear-timeout') || '30000')
 const WORKER_HEALTH_CHECK_INTERVAL = number.parseInt(env.getConf('y-socket-io-worker-health-check-interval') || '5000')
 const NEVER_REJECT_CONNECTION = env.getConf('y-socket-io-never-reject-connection') === 'true'
+const PERSIST_LEADER_HEARTBEAT_INTERVAL = number.parseInt(env.getConf('y-socket-io-server-persist-leader-heartbeat-interval') || '5000')
 
 process.on('SIGINT', function () {
   // calling .shutdown allows your process to exit normally
@@ -169,6 +171,21 @@ export class YSocketIO {
    * @private
    */
   persistWorkerHealthCheckTimeout = null
+  /**
+   * @type {NodeJS.Timeout | null}
+   * @private
+   */
+  persistentHeartbeatTimeout = null
+  /**
+   * @type {Set<string>}
+   * @private
+   */
+  persistentLeaderOf = new Set()
+  /**
+   * @type {string}
+   * @private
+   */
+  serverId = randomUUID()
 
   /**
    * YSocketIO constructor.
@@ -209,6 +226,8 @@ export class YSocketIO {
       this.registerPersistWorkerResolve()
       this.registerPersistWorkerHealthCheck()
     }
+
+    this.registerPersistentLeaderHeartbeat()
 
     this.nsp = this.io.of(/^\/yjs\|.*$/)
 
@@ -286,6 +305,7 @@ export class YSocketIO {
           this.subscriber?.ensureSubId(stream, doc.redisLastId)
         }
         this.startSynchronization(socket, doc)
+        await this.tryAcquirePersistentLeader(namespace)
       })()
     })
 
@@ -394,6 +414,7 @@ export class YSocketIO {
         if (nsp?.sockets.size === 0 && stream) {
           this.cleanupNamespace(ns, stream, DEFAULT_CLEAR_TIMEOUT)
           if (this.namespaceDocMap.has(ns)) this.debouncedPersist(ns, true)
+          this.persistentLeaderOf.delete(ns)
         }
         logSocketIO(`disconnecting socket in ${ns}, ${nsp?.sockets.size || 0} remaining`)
       }
@@ -540,10 +561,13 @@ export class YSocketIO {
         // are all synchronize operations
         this.debouncedPersistMap.delete(namespace)
 
+        const isLeader = await this.tryAcquirePersistentLeader(namespace)
+        if (!isLeader) return
+
         try {
           assert(this.client)
           const doc = this.namespaceDocMap.get(namespace)?.ydoc
-          logSocketIO(`trying to persist ${namespace}`)
+          logSocketIO(`trying to persist ${namespace} in [SID: ${this.serverId}]`)
           if (!doc) return
           if (this.persistWorker && this.workerReady) {
             /** @type {ReturnType<typeof promiseWithResolvers<void>>} */
@@ -659,6 +683,9 @@ export class YSocketIO {
       if (this.persistWorkerHealthCheckTimeout) {
         clearInterval(this.persistWorkerHealthCheckTimeout)
       }
+      if (this.persistentHeartbeatTimeout) {
+        clearTimeout(this.persistentHeartbeatTimeout)
+      }
       this.subscriber?.destroy()
       return this.client?.destroy()
     } catch (e) {
@@ -766,5 +793,79 @@ export class YSocketIO {
       this.workerLastHeartbeat = Date.now()
     }
     return health
+  }
+
+  /**
+   * @param {string} namespace
+  */
+  getLeaderKeyOf (namespace) {
+    assert(this.client)
+    return `${this.client.prefix}:persist-leader:${namespace}`
+  }
+
+  async registerPersistentLeaderHeartbeat () {
+    this.persistentHeartbeatTimeout = setTimeout(async () => {
+      assert(this.client)
+      const redis = this.client.redis
+
+      try {
+        /**
+         * @type {Array<Promise<any>>}
+         */
+        const promises = []
+        for (const namespace of this.persistentLeaderOf) {
+          const key = this.getLeaderKeyOf(namespace)
+          const curLeader = await redis.get(key)
+
+          // remove orphaned if exist
+          const aliveClients = this.namespaceMap.get(namespace)?.sockets.size || 0
+          if (aliveClients === 0) {
+            logSocketIO(`clearing leader heartbeat for [${namespace}] (SID: ${this.serverId})`)
+            this.persistentLeaderOf.delete(namespace)
+            continue
+          }
+
+          if (curLeader === this.serverId) {
+            logSocketIO(`set leader heartbeat for [${namespace}] (SID: ${this.serverId})`)
+            promises.push(
+              redis.set(key, this.serverId, {
+                XX: true,
+                PX: PERSIST_LEADER_HEARTBEAT_INTERVAL
+              })
+            )
+          } else {
+            logSocketIO(`lost leadership for [${namespace}] (SID: ${this.serverId})`)
+            this.persistentLeaderOf.delete(namespace)
+          }
+        }
+
+        await promise.all(promises)
+      } catch (e) {
+        console.error(e)
+      }
+
+      // register next round
+      this.persistentHeartbeatTimeout = setTimeout(
+        () => this.registerPersistentLeaderHeartbeat(),
+        PERSIST_LEADER_HEARTBEAT_INTERVAL / 2
+      )
+    })
+  }
+
+  /**
+   * @param {string} namespace
+   */
+  async tryAcquirePersistentLeader (namespace) {
+    assert(this.client)
+    const redis = this.client.redis
+    const key = this.getLeaderKeyOf(namespace)
+    const ok = await redis.set(key, this.serverId, {
+      NX: true,
+      PX: PERSIST_LEADER_HEARTBEAT_INTERVAL
+    })
+    if (!ok) return false
+
+    this.persistentLeaderOf.add(namespace)
+    return true
   }
 }
