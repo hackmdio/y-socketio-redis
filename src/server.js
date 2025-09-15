@@ -53,7 +53,7 @@ export const createYSocketIOServer = async ({
 
   const oriDestroy = server.destroy
   server.destroy = async () => {
-    await oriDestroy.bind(server)()
+    await oriDestroy.call(server)
     await new Promise((resolve) => httpServer.close(resolve))
   }
   return server

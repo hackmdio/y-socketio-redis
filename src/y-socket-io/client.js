@@ -448,7 +448,7 @@ export class SocketIOProvider extends Observable {
       if (!ack) {
         this._updateRetries++
         if (this.socket.disconnected) return
-        this.onUpdateDoc(update, origin)
+        await this.onUpdateDoc(update, origin)
         return
       } else {
         this._updateRetries = 0
