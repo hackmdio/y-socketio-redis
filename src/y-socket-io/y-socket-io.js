@@ -859,13 +859,13 @@ export class YSocketIO {
     assert(this.client)
     const redis = this.client.redis
     const key = this.getLeaderKeyOf(namespace)
-    await redis.set(key, this.serverId, {
+    const prevVal = await redis.set(key, this.serverId, {
       NX: true,
-      PX: PERSIST_LEADER_HEARTBEAT_INTERVAL
+      PX: PERSIST_LEADER_HEARTBEAT_INTERVAL,
+      GET: true
     })
 
-    const curLeader = await redis.get(key)
-    const ok = curLeader === this.serverId
+    const ok = prevVal === this.serverId || prevVal === null
     if (!ok) return false
 
     this.persistentLeaderOf.add(namespace)
