@@ -1,5 +1,5 @@
 import * as Y from 'yjs'
-import * as redis from 'redis'
+import { createClient, defineScript, commandOptions } from 'redis'
 import * as map from 'lib0/map'
 import * as decoding from 'lib0/decoding'
 import * as awarenessProtocol from 'y-protocols/awareness'
@@ -97,6 +97,7 @@ export const createApiClient = async (store, { redisPrefix, redisUrl, enableAwar
 }
 
 export class Api {
+  redis
   /**
    * @param {import('./storage.js').AbstractStorage} store
    * @param {string=} prefix
@@ -138,11 +139,11 @@ export class Api {
           redis.call("EXPIRE", KEYS[1], ${ROOM_STREAM_TTL})
         `
 
-    this.redis = redis.createClient({
+    this.redis = createClient({
       url,
       // scripting: https://github.com/redis/node-redis/#lua-scripts
       scripts: {
-        addMessage: redis.defineScript({
+        addMessage: defineScript({
           NUMBER_OF_KEYS: 1,
           SCRIPT: addScript,
           /**
@@ -159,7 +160,7 @@ export class Api {
             return x
           }
         }),
-        xDelIfEmpty: redis.defineScript({
+        xDelIfEmpty: defineScript({
           NUMBER_OF_KEYS: 1,
           SCRIPT: `
             if redis.call("XLEN", KEYS[1]) == 0 then
@@ -193,7 +194,7 @@ export class Api {
       return []
     }
     const reads = await this.redis.xRead(
-      redis.commandOptions({ returnBuffers: true }),
+      commandOptions({ returnBuffers: true }),
       streams,
       { BLOCK: 1000, COUNT: 1000 }
     )
@@ -241,7 +242,7 @@ export class Api {
    * @param {string} docid
    */
   async getDoc (room, docid) {
-    const ms = extractMessagesFromStreamReply(await this.redis.xRead(redis.commandOptions({ returnBuffers: true }), { key: computeRedisRoomStreamName(room, docid, this.prefix), id: '0' }), this.prefix)
+    const ms = extractMessagesFromStreamReply(await this.redis.xRead(commandOptions({ returnBuffers: true }), { key: computeRedisRoomStreamName(room, docid, this.prefix), id: '0' }), this.prefix)
     const docMessages = ms.get(room)?.get(docid) || null
     if (docMessages?.messages) logApi(`processing messages of length: ${docMessages?.messages.length} in room: ${room}`)
     const docstate = await this.store.retrieveDoc(room, docid)
@@ -289,7 +290,7 @@ export class Api {
    * @param {string} docid
    */
   async getRedisLastId (room, docid) {
-    const ms = extractMessagesFromStreamReply(await this.redis.xRead(redis.commandOptions({ returnBuffers: true }), { key: computeRedisRoomStreamName(room, docid, this.prefix), id: '0' }), this.prefix)
+    const ms = extractMessagesFromStreamReply(await this.redis.xRead(commandOptions({ returnBuffers: true }), { key: computeRedisRoomStreamName(room, docid, this.prefix), id: '0' }), this.prefix)
     const docMessages = ms.get(room)?.get(docid) || null
     return docMessages?.lastId.toString() || '0'
   }
@@ -370,6 +371,7 @@ export class Api {
             // call YDOC_UPDATE_CALLBACK here
             const formData = new FormData()
             // @todo only convert ydoc to updatev2 once
+            // @ts-ignore
             formData.append('ydoc', new Blob([Y.encodeStateAsUpdateV2(ydoc)]))
             // @todo should add a timeout to fetch (see fetch signal abortcontroller)
             const res = await fetch(new URL(room, ydocUpdateCallback), { body: formData, method: 'PUT' })

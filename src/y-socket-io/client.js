@@ -37,6 +37,9 @@ import { io } from 'socket.io-client'
  *
  *  @prop {Record<string, unknown>=} auth
  *  (Optional) Add the authentication data
+ *
+ *  @prop {ClientSocket=} socket
+ *  (Optional) Supply custom socket.io client socket. If supplied, `socketIoOptions` will be ignored.
  */
 
 /**
@@ -138,7 +141,8 @@ export class SocketIOProvider extends Observable {
       awareness = enableAwareness ? new AwarenessProtocol.Awareness(doc) : undefined,
       resyncInterval = -1,
       disableBc = false,
-      auth = {}
+      auth = {},
+      socket
     } = {},
     socketIoOptions = undefined
   ) {
@@ -157,14 +161,17 @@ export class SocketIOProvider extends Observable {
     this.disableBc = disableBc
     this._socketIoOptions = socketIoOptions
 
-    this.socket = io(`${this.url}/yjs|${roomName}`, {
-      autoConnect: false,
-      transports: ['websocket'],
-      forceNew: true,
-      auth,
-      ...socketIoOptions
-    })
-    this._socketIoOptions = socketIoOptions
+    if (socket) {
+      this.socket = socket
+    } else {
+      this.socket = io(`${this.url}/yjs|${roomName}`, {
+        autoConnect: false,
+        transports: ['websocket'],
+        forceNew: true,
+        auth,
+        ...socketIoOptions
+      })
+    }
 
     this.doc.on('update', this.onUpdateDoc)
 
@@ -333,17 +340,22 @@ export class SocketIOProvider extends Observable {
       )
     }
     if (resyncInterval > 0) {
-      this.resyncInterval = setInterval(() => {
-        if (this.socket.disconnected) return
-        this.socket.emit(
-          'sync-step-1',
-          Y.encodeStateVector(this.doc),
-          (/** @type {Uint8Array} */ update) => {
-            Y.applyUpdate(this.doc, new Uint8Array(update), this)
-          }
-        )
-      }, resyncInterval)
+      this.resyncInterval = setInterval(() => this.resync(), resyncInterval)
     }
+  }
+
+  /**
+   * Resynchronize the document with the server by firing `sync-step-1`.
+   */
+  resync () {
+    if (this.socket.disconnected) return
+    this.socket.emit(
+      'sync-step-1',
+      Y.encodeStateVector(this.doc),
+      (/** @type {Uint8Array} */ update) => {
+        Y.applyUpdate(this.doc, new Uint8Array(update), this)
+      }
+    )
   }
 
   /**
@@ -407,6 +419,11 @@ export class SocketIOProvider extends Observable {
   }
 
   /**
+   * @type {number}
+   * @private
+   */
+  _updateRetries = 0
+  /**
    * This function is executed when the document is updated, if the instance that
    * emit the change is not this, it emit the changes by socket and broadcast channel.
    * @private
@@ -414,9 +431,28 @@ export class SocketIOProvider extends Observable {
    * @param {SocketIOProvider} origin The SocketIOProvider instance that emits the change.
    * @readonly
    */
-  onUpdateDoc = (update, origin) => {
+  onUpdateDoc = async (update, origin) => {
+    if (this._updateRetries > 3) {
+      this._updateRetries = 0
+      this.disconnect()
+      this.connect()
+      return
+    }
+
     if (origin !== this) {
-      this.socket.emit('sync-update', update)
+      /** @type {boolean} */
+      const ack = await Promise.race([
+        new Promise((resolve) => this.socket.emit('sync-update', update, () => resolve(true))),
+        new Promise((resolve) => setTimeout(() => resolve(false), 3000))
+      ])
+      if (!ack) {
+        this._updateRetries++
+        if (this.socket.disconnected) return
+        await this.onUpdateDoc(update, origin)
+        return
+      } else {
+        this._updateRetries = 0
+      }
       if (this.bcconnected) {
         bc.publish(
           this._broadcastChannel,
