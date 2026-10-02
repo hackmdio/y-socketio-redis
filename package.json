@@ -17,6 +17,7 @@
     "lint": "standard && tsc",
     "lint:fix": "standard --fix && tsc",
     "test": "dotenvx run --env-file=.env -- node tests/index.js",
+    "test:consistency": "node --test tests/consistency.test.js",
     "test-inspect": "dotenvx run --env-file=.env -- node --inspect-brk tests/index.js",
     "preversion": "npm run lint && npm run dist",
     "clean": "rm -rf **/dist "

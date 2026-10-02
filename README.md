@@ -219,6 +219,29 @@ npm start
 
 Open [`http://localhost:5173`](http://localhost:5173) in a browser.
 
+## Consistency tests
+
+Run the ACK, lease ownership, and reconnect regression tests against a disposable
+Redis instance:
+
+```sh
+YSR_TEST_REDIS=redis://127.0.0.1:36379 npm run test:consistency
+```
+
+The tests use a unique key prefix and remove only their own keys. They include
+three server instances sharing Redis and a real Socket.IO reconnect.
+
+A sync-update ACK confirms Redis stream acceptance, not database persistence.
+Retries are appended again and safely merged by Yjs. Persistence leases use a
+unique token per acquisition; renewal and release atomically check that token.
+All servers must be upgraded before relying on owner-checked leases, because
+older servers can still unconditionally remove another server's lease.
+
+Lease ownership does not fence database commits. A worker dispatched before
+lease expiry can still finish after a successor starts persisting. Replacement
+storage adapters need storage-enforced commit ordering to prevent stale
+overwrites; that contract is outside this change and the storage API is unchanged.
+
 ## License
 
 [The MIT License](./LICENSE) © Kevin Jahns

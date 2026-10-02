@@ -9,6 +9,11 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
+    services:
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
     steps:
       - uses: actions/checkout@v3
       - uses: actions/setup-node@v3
@@ -17,4 +22,7 @@ jobs:
       - uses: pnpm/action-setup@v4
       - run: pnpm i
       - run: pnpm lint
+      - run: pnpm test:consistency
+        env:
+          YSR_TEST_REDIS: redis://127.0.0.1:6379
       - run: pnpm dist
