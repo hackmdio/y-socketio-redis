@@ -146,6 +146,11 @@ export class YSocketIO {
    */
   awaitingPersistMap = new Map()
   /**
+   * @type {Map<string, { room: string, worker: import('worker_threads').Worker, resolve: () => void, reject: (error: Error) => void }>}
+   * @private
+   */
+  workerPersistRequests = new Map()
+  /**
    * @type {Map<string, NodeJS.Timeout>}
    * @private
    * @readonly
@@ -501,8 +506,8 @@ export class YSocketIO {
     let changed = false
     const existDoc = this.namespaceDocMap.get(namespace)
     if (existDoc) {
-      existDoc.ydoc.on('afterTransaction', (tr) => {
-        changed = tr.changed.size > 0
+      existDoc.ydoc.once('afterTransaction', (tr) => {
+        changed = tr.changed.size > 0 || tr.doc.store.pendingStructs !== null || tr.doc.store.pendingDs !== null
       })
       Y.transact(existDoc.ydoc, () => {
         for (const msg of updates) {
@@ -533,7 +538,8 @@ export class YSocketIO {
       this.namespacePersistentMap.set(namespace, now)
       this.debouncedPersist(namespace, nsp.sockets.size === 0)
     }
-    this.namespaceDocMap.get(namespace)?.ydoc.destroy()
+    const previousDoc = this.namespaceDocMap.get(namespace)
+    if (previousDoc !== doc) previousDoc?.ydoc.destroy()
     this.namespaceDocMap.set(namespace, doc)
   }
 
@@ -542,6 +548,7 @@ export class YSocketIO {
    * @param {boolean=} immediate
    */
   debouncedPersist (namespace, immediate = false) {
+    if (this.destroyed) return
     if (this.debouncedPersistMap.has(namespace)) {
       if (!immediate) return
       clearTimeout(this.debouncedPersistMap.get(namespace) || undefined)
@@ -551,46 +558,22 @@ export class YSocketIO {
       : PERSIST_INTERVAL + (Math.random() - 0.5) * PERSIST_INTERVAL
     const timeout = setTimeout(
       async () => {
-        // wait for previous persisting operation if exists
         const prev = this.awaitingPersistMap.get(namespace)
-        if (prev?.promise) await prev.promise
-        // delete persist entry to allow queueing next persisting operation
-        // we can delete it here because the following until awaiting persist
-        // are all synchronize operations
+        if (prev) await prev.promise.catch(() => {})
+        if (this.destroyed || this.debouncedPersistMap.get(namespace) !== timeout) return
         this.debouncedPersistMap.delete(namespace)
-
-        const isLeader = await this.tryAcquirePersistentLeader(namespace)
-        if (!isLeader) return
-
+        const operation = this.persistNamespace(namespace)
+        this.awaitingPersistMap.set(namespace, { promise: operation, resolve: () => {} })
         try {
-          assert(this.client)
-          const doc = this.namespaceDocMap.get(namespace)?.ydoc
-          logSocketIO(`trying to persist ${namespace} in [SID: ${this.serverId}]`)
-          if (!doc) return
-          if (this.persistWorker && this.workerReady) {
-            /** @type {ReturnType<typeof promiseWithResolvers<void>>} */
-            const { promise, resolve } = promiseWithResolvers()
-            this.awaitingPersistMap.set(namespace, { promise, resolve })
-
-            const docState = Y.encodeStateAsUpdateV2(doc)
-            const buf = new Uint8Array(new SharedArrayBuffer(docState.length))
-            buf.set(docState)
-            this.persistWorker.postMessage({
-              room: namespace,
-              docstate: buf
-            })
-            await promise
-          } else {
-            const promise = this.client.store.persistDoc(namespace, 'index', doc)
-            this.awaitingPersistMap.set(namespace, { promise, resolve: () => {} })
-            await promise
-          }
-
-          await this.client.trimRoomStream(namespace, 'index')
+          await operation
         } catch (e) {
-          // suppress redis client closed error
           if (!(e instanceof ClientClosedError)) {
             console.error(e)
+          }
+          if (this.namespaceDocMap.has(namespace)) this.debouncedPersist(namespace)
+        } finally {
+          if (this.awaitingPersistMap.get(namespace)?.promise === operation) {
+            this.awaitingPersistMap.delete(namespace)
           }
         }
       },
@@ -598,6 +581,51 @@ export class YSocketIO {
     )
 
     this.debouncedPersistMap.set(namespace, timeout)
+  }
+
+  /** @param {string} namespace */
+  async persistNamespace (namespace) {
+    const isLeader = await this.tryAcquirePersistentLeader(namespace)
+    if (!isLeader || this.destroyed) return
+    assert(this.client)
+    if (!this.namespaceDocMap.has(namespace)) return
+    // Read the stream prefix and document together. The subscription cache may
+    // lag behind Redis, so its contents cannot authorize trimming the head.
+    const snapshot = await this.client.getDoc(namespace, 'index')
+    logSocketIO(`trying to persist ${namespace} in [SID: ${this.serverId}]`)
+    try {
+      if (this.destroyed) return
+      if (this.persistWorker && this.workerReady) {
+        await this.persistInWorker(namespace, Y.encodeStateAsUpdateV2(snapshot.ydoc))
+      } else {
+        await this.client.store.persistDoc(namespace, 'index', snapshot.ydoc)
+      }
+      await this.client.trimRoomStream(namespace, 'index', snapshot.redisLastId)
+    } finally {
+      snapshot.awareness?.destroy()
+      snapshot.ydoc.destroy()
+    }
+  }
+
+  /**
+   * @param {string} room
+   * @param {Uint8Array} state
+   */
+  async persistInWorker (room, state) {
+    const worker = this.persistWorker
+    assert(worker)
+    const requestId = randomUUID()
+    /** @type {ReturnType<typeof promiseWithResolvers<void>>} */
+    const pending = promiseWithResolvers()
+    this.workerPersistRequests.set(requestId, { room, worker, resolve: pending.resolve, reject: pending.reject })
+    try {
+      const docstate = new Uint8Array(new SharedArrayBuffer(state.length))
+      docstate.set(state)
+      worker.postMessage({ room, requestId, docstate })
+      await pending.promise
+    } finally {
+      this.workerPersistRequests.delete(requestId)
+    }
   }
 
   /**
@@ -677,8 +705,17 @@ export class YSocketIO {
   }
 
   destroy () {
+    if (this.destroyed) return
     this.destroyed = true
     this.pendingLeaderAcquisitions.clear()
+    for (const timeout of this.debouncedPersistMap.values()) clearTimeout(timeout || undefined)
+    this.debouncedPersistMap.clear()
+    for (const timeout of this.awaitingCleanupNamespace.values()) clearTimeout(timeout)
+    this.awaitingCleanupNamespace.clear()
+    if (this.persistWorker) {
+      this.failPersistWorker(this.persistWorker, new Error('Server destroyed'))
+      this.persistWorker.terminate().catch(console.error)
+    }
     try {
       if (this.persistWorkerHealthCheckTimeout) {
         clearInterval(this.persistWorkerHealthCheckTimeout)
@@ -694,14 +731,37 @@ export class YSocketIO {
   }
 
   registerPersistWorkerResolve () {
-    if (!this.persistWorker) return
-    this.persistWorker.on('message', ({ event, room }) => {
-      if (event === 'persisted') this.awaitingPersistMap.get(room)?.resolve()
+    const worker = this.persistWorker
+    if (!worker) return
+    worker.on('message', ({ event, room, requestId, error }) => {
+      if (worker !== this.persistWorker || this.destroyed) return
+      const request = this.workerPersistRequests.get(requestId)
+      if (request?.worker === worker && request.room === room) {
+        if (event === 'persisted') request.resolve()
+        if (event === 'persist-error') request.reject(new Error(error || 'Worker persistence failed'))
+      }
       if (event === 'pong' && this.workerHeartbeatContext) {
         this.workerHeartbeatContext.resolve(true)
       }
-      this.workerReady = true
+      if (event === 'ready' || event === 'pong') this.workerReady = true
     })
+    worker.on('error', error => this.failPersistWorker(worker, error))
+    worker.on('exit', code => this.failPersistWorker(worker, new Error(`Persistence worker exited (${code})`)))
+  }
+
+  /**
+   * @param {import('worker_threads').Worker} worker
+   * @param {Error} error
+   */
+  failPersistWorker (worker, error) {
+    if (worker === this.persistWorker) {
+      this.workerReady = false
+      this.workerLastHeartbeat = null
+      this.workerHeartbeatContext?.resolve(false)
+    }
+    for (const request of this.workerPersistRequests.values()) {
+      if (request.worker === worker) request.reject(error)
+    }
   }
 
   /** @param {string} namespace */
@@ -730,12 +790,23 @@ export class YSocketIO {
 
     const timer = setTimeout(async () => {
       const awaitingPersist = this.awaitingPersistMap.get(namespace)
-      if (awaitingPersist) await awaitingPersist.promise
+      try {
+        if (awaitingPersist) await awaitingPersist.promise
+      } catch (error) {
+        if (this.awaitingCleanupNamespace.get(namespace) === timer) {
+          this.cleanupNamespace(namespace, stream, DEFAULT_CLEAR_TIMEOUT, true)
+        }
+        return
+      }
       // A reconnect or a newer cleanup timer may have superseded this callback
       // while it was waiting for persistence.
       if (this.awaitingCleanupNamespace.get(namespace) !== timer) return
       if (this.namespaceMap.get(namespace)?.sockets.size) {
         this.awaitingCleanupNamespace.delete(namespace)
+        return
+      }
+      if (this.debouncedPersistMap.has(namespace)) {
+        this.cleanupNamespace(namespace, stream, DEFAULT_CLEAR_TIMEOUT, true)
         return
       }
       this.cleanupNamespaceImpl(namespace, stream)
@@ -782,36 +853,33 @@ export class YSocketIO {
     `, { keys: [this.getLeaderKeyOf(namespace)], arguments: [token] })
   }
 
-  async waitUntilWorkerReady () {
-    if (!this.persistWorker || this.workerReady) return
-    /** @type {ReturnType<typeof promiseWithResolvers<void>>} */
-    const { promise, resolve } = promiseWithResolvers()
-    const timer = setInterval(() => {
-      if (!this.workerReady) return
-      clearInterval(timer)
-      resolve()
-    }, 100)
-    await promise
-  }
-
   registerPersistWorkerHealthCheck () {
+    if (this.destroyed) return
     this.persistWorkerHealthCheckTimeout = setTimeout(async () => {
-      const workerHealth = await this.workerHealthCheck()
-      if (!workerHealth) {
-        logSocketIO('worker thread is unhealthy, recreating')
-        assert(this.getPersistWorker)
-        this.workerReady = false
-        await this.persistWorker?.removeAllListeners().terminate()
-        this.persistWorker = this.getPersistWorker()
-        this.registerPersistWorkerResolve()
-        await this.waitUntilWorkerReady()
+      try {
+        const workerHealth = await this.workerHealthCheck()
+        if (!workerHealth && !this.destroyed) {
+          logSocketIO('worker thread is unhealthy, recreating')
+          assert(this.getPersistWorker)
+          if (this.persistWorker) {
+            this.failPersistWorker(this.persistWorker, new Error('Persistence worker is unresponsive'))
+            await this.persistWorker.terminate()
+          }
+          if (this.destroyed) return
+          this.persistWorker = this.getPersistWorker()
+          this.registerPersistWorkerResolve()
+        }
+      } catch (error) {
+        console.error(error)
+      } finally {
+        this.registerPersistWorkerHealthCheck()
       }
-      this.registerPersistWorkerHealthCheck()
     }, WORKER_HEALTH_CHECK_INTERVAL)
   }
 
   async workerHealthCheck () {
-    if (!this.persistWorker || this.workerHeartbeatContext) return null
+    if (!this.persistWorker) return false
+    if (this.workerHeartbeatContext) return this.workerHeartbeatContext.promise
     if (
       this.workerLastHeartbeat &&
       Date.now() - this.workerLastHeartbeat < WORKER_HEALTH_CHECK_INTERVAL * 2
@@ -821,14 +889,20 @@ export class YSocketIO {
 
     /** @type {ReturnType<typeof promiseWithResolvers<boolean>>} */
     const { promise: heartbeatPromise, resolve } = promiseWithResolvers()
-    this.workerHeartbeatContext = { promise: heartbeatPromise, resolve }
+    const context = { promise: heartbeatPromise, resolve }
+    this.workerHeartbeatContext = context
     const now = performance.now()
-    this.persistWorker.postMessage({ event: 'ping' })
-    const health = await Promise.race([
-      heartbeatPromise,
-      promise.wait(3000).then(() => false)
-    ])
-    this.workerHeartbeatContext = null
+    const timer = setTimeout(() => resolve(false), 3000)
+    let health = false
+    try {
+      this.persistWorker.postMessage({ event: 'ping' })
+      health = await heartbeatPromise
+    } catch (error) {
+      health = false
+    } finally {
+      clearTimeout(timer)
+      if (this.workerHeartbeatContext === context) this.workerHeartbeatContext = null
+    }
     if (health) {
       logSocketIO(`worker health check: responded in ${performance.now() - now}ms`)
       this.workerLastHeartbeat = Date.now()

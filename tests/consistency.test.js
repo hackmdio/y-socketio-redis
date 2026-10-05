@@ -5,11 +5,18 @@ import { createServer as createHttpServer } from 'node:http'
 import { setTimeout as delay } from 'node:timers/promises'
 import { Server } from 'socket.io'
 import { io as connect } from 'socket.io-client'
+import { EventEmitter } from 'node:events'
+import { Worker } from 'node:worker_threads'
 import * as Y from 'yjs'
-import { YSocketIO } from '../src/y-socket-io/y-socket-io.js'
-import { createApiClient } from '../src/api.js'
 import { createMemoryStorage } from '../src/storage/memory.js'
 import { promiseWithResolvers } from '../src/y-socket-io/utils.js'
+
+process.env.Y_WORKER_DISABLED = 'true'
+process.env.Y_SOCKET_IO_SERVER_PERSIST_INTERVAL = '20'
+process.env.Y_SOCKET_IO_WORKER_HEALTH_CHECK_INTERVAL = '20'
+/** @typedef {import('../src/y-socket-io/y-socket-io.js').YSocketIO} SocketIOServer */
+const { YSocketIO } = await import('../src/y-socket-io/y-socket-io.js')
+const { createApiClient, computeRedisRoomStreamName } = await import('../src/api.js')
 
 /** @param {() => boolean | Promise<boolean>} predicate */
 async function until (predicate) {
@@ -125,7 +132,7 @@ const prefix = `consistency-${randomUUID()}`
 const store = createMemoryStorage()
 /** @type {import('../src/api.js').Api[]} */
 const clients = []
-/** @type {YSocketIO[]} */
+/** @type {SocketIOServer[]} */
 const servers = []
 
 before(async () => {
@@ -142,20 +149,24 @@ after(async () => {
   for (const server of servers) {
     for (const timer of Reflect.get(server, 'awaitingCleanupNamespace').values()) clearTimeout(timer)
     for (const timer of Reflect.get(server, 'debouncedPersistMap').values()) clearTimeout(timer)
+    await server.destroy()
   }
-  if (clients[0]) {
-    const keys = await clients[0].redis.keys(`${prefix}:*`)
-    if (keys.length) await clients[0].redis.del(keys)
+  const cleanup = await createApiClient(store, { redisUrl, redisPrefix: prefix, enableAwareness: false })
+  try {
+    const keys = await cleanup.redis.keys(`${prefix}:*`)
+    if (keys.length) await cleanup.redis.del(keys)
+  } finally {
+    await cleanup.destroy()
   }
   await Promise.all(clients.map(client => client.destroy()))
 })
 
-/** @param {YSocketIO} server @param {string} room */
+/** @param {SocketIOServer} server @param {string} room */
 function activate (server, room) {
   Reflect.get(server, 'namespaceMap').set(room, Reflect.get(server, 'io').of(`/yjs|${room}`))
 }
 
-/** @param {YSocketIO} server @param {string} room */
+/** @param {SocketIOServer} server @param {string} room */
 function cleanup (server, room) {
   Reflect.get(server, 'cleanupNamespaceImpl').call(server, room, `${prefix}:room:${room}:index`)
 }
@@ -407,4 +418,318 @@ test('a superseded cleanup callback cannot release the lease while a newer timer
   assert.equal(Reflect.get(a, 'namespaceMap').has(room), true)
   a.cancelNamespaceCleanup(room)
   Reflect.get(a, 'awaitingPersistMap').delete(room)
+})
+
+/** @param {import('node:test').TestContext} t */
+async function persistenceCase (t) {
+  const storage = createMemoryStorage()
+  const client = await createApiClient(storage, { redisUrl, redisPrefix: `${prefix}:${randomUUID()}`, enableAwareness: false })
+  client.redisMinMessageLifetime = 0
+  const server = createServer()
+  Reflect.set(server, 'client', client)
+  const room = 'snapshot'
+  const stream = computeRedisRoomStreamName(room, 'index', client.prefix)
+  activate(server, room)
+  Reflect.get(server, 'streamNamespaceMap').set(stream, room)
+  clients.push(client)
+  servers.push(server)
+  t.after(async () => {
+    await server.destroy()
+    for (const doc of Reflect.get(server, 'namespaceDocMap').values()) doc.ydoc.destroy()
+  })
+  return {
+    server,
+    client,
+    storage,
+    room,
+    stream,
+    /** @param {string} id @param {Uint8Array} update */
+    append: (id, update) => client.redis.xAdd(stream, id, { m: Buffer.from(server.toRedis('sync-update', update)) }),
+    load: async () => {
+      const doc = await client.getDoc(room, 'index')
+      Reflect.get(server, 'namespaceDocMap').set(room, doc)
+      return doc
+    }
+  }
+}
+
+test('a delayed direct save keeps its snapshot and retains later updates from the same millisecond', async t => {
+  const { server, client, storage, room, stream, append, load } = await persistenceCase(t)
+  const { first, second } = createUpdates()
+  await append('1000-0', first)
+  await load()
+  const started = promiseWithResolvers()
+  const release = promiseWithResolvers()
+  const persist = storage.persistDoc.bind(storage)
+  storage.persistDoc = async (...args) => {
+    started.resolve(undefined)
+    await release.promise
+    await persist(...args)
+  }
+  const operation = server.persistNamespace(room)
+  await started.promise
+  try {
+    await append('1000-1', second)
+    await Reflect.get(server, 'redisMessageSubscriber')(stream, [server.toRedis('sync-update', second)])
+    const scheduled = Reflect.get(server, 'debouncedPersistMap')
+    clearTimeout(scheduled.get(room))
+    scheduled.delete(room)
+  } finally {
+    release.resolve(undefined)
+  }
+  await operation
+  assert.deepEqual((await client.redis.xRange(stream, '-', '+')).map(m => m.id), ['1000-1'])
+  const saved = await storage.retrieveDoc(room, 'index')
+  assert.ok(saved)
+  const doc = new Y.Doc()
+  Y.applyUpdateV2(doc, saved.doc)
+  assert.deepEqual(doc.getMap().toJSON(), { first: 1 })
+  doc.destroy()
+  await server.persistNamespace(room)
+  assert.equal(await client.redis.xLen(stream), 0)
+})
+
+test('trimming requires a snapshot boundary and honors minimum retention', async t => {
+  const { client, room, stream, append } = await persistenceCase(t)
+  const { first } = createUpdates()
+  await append('1000-0', first)
+  const recent = `${Date.now()}-0`
+  await append(recent, first)
+  await client.trimRoomStream(room, 'index')
+  assert.equal(await client.redis.xLen(stream), 2)
+  client.redisMinMessageLifetime = 60000
+  await client.trimRoomStream(room, 'index', recent)
+  assert.deepEqual((await client.redis.xRange(stream, '-', '+')).map(m => m.id), [recent])
+})
+
+test('queue workers trim through their snapshot rather than the task ID or current stream head', async t => {
+  const { client, storage, stream, append } = await persistenceCase(t)
+  const { first, second } = createUpdates()
+  await append('1000-0', first)
+  await client.redis.xAdd(client.redisWorkerStreamName, '*', { compact: stream })
+  const started = promiseWithResolvers()
+  const release = promiseWithResolvers()
+  const persist = storage.persistDoc.bind(storage)
+  storage.persistDoc = async (...args) => {
+    started.resolve(undefined)
+    await release.promise
+    await persist(...args)
+  }
+  const operation = client.consumeWorkerQueue({ tryReclaimCount: 0, tryClaimCount: 1, blockTime: 10 })
+  await started.promise
+  await append('1000-1', second)
+  release.resolve(undefined)
+  await operation
+  assert.deepEqual((await client.redis.xRange(stream, '-', '+')).map(m => m.id), ['1000-1'])
+  await client.consumeWorkerQueue({ tryReclaimCount: 0, tryClaimCount: 1, blockTime: 10 })
+  assert.equal(await client.redis.xLen(stream), 0)
+  await client.consumeWorkerQueue({ tryReclaimCount: 0, tryClaimCount: 1, blockTime: 10 })
+  assert.equal(await client.redis.xLen(client.redisWorkerStreamName), 0)
+})
+
+test('a failed queue save retains its stream and can be reclaimed', async t => {
+  const { client, storage, stream, append } = await persistenceCase(t)
+  await append('1000-0', createUpdates().first)
+  await client.redis.xAdd(client.redisWorkerStreamName, '*', { compact: stream })
+  const persist = storage.persistDoc.bind(storage)
+  storage.persistDoc = async () => { throw new Error('Save failed') }
+  await assert.rejects(client.consumeWorkerQueue({ tryReclaimCount: 0, tryClaimCount: 1, blockTime: 10 }), /Save failed/)
+  assert.equal(await client.redis.xLen(stream), 1)
+  storage.persistDoc = persist
+  client.redisWorkerTimeout = 0
+  await client.consumeWorkerQueue({ tryReclaimCount: 1, tryClaimCount: 0 })
+  assert.equal(await client.redis.xLen(stream), 0)
+})
+
+test('out-of-order Yjs structs are persisted before their stream entries are trimmed', async t => {
+  const { client, storage, room, stream, append } = await persistenceCase(t)
+  const source = new Y.Doc()
+  /** @type {Uint8Array[]} */
+  const updates = []
+  source.on('update', update => updates.push(update))
+  source.getText().insert(0, 'a')
+  source.getText().insert(1, 'b')
+  await append('1000-0', updates[1])
+  await client.redis.xAdd(client.redisWorkerStreamName, '*', { compact: stream })
+  await client.consumeWorkerQueue({ tryReclaimCount: 0, tryClaimCount: 1, blockTime: 10 })
+  assert.equal(await client.redis.xLen(stream), 0)
+  const saved = await storage.retrieveDoc(room, 'index')
+  assert.ok(saved)
+  const restored = new Y.Doc()
+  Y.applyUpdateV2(restored, saved.doc)
+  Y.applyUpdate(restored, updates[0])
+  assert.equal(restored.getText().toString(), 'ab')
+  source.destroy()
+  restored.destroy()
+})
+
+test('failed direct saves retry without another update and defer namespace cleanup', async t => {
+  const { server, client, storage, room, stream, append, load } = await persistenceCase(t)
+  await append('1000-0', createUpdates().first)
+  await load()
+  const firstSave = promiseWithResolvers()
+  const retry = promiseWithResolvers()
+  const persist = storage.persistDoc.bind(storage)
+  let attempts = 0
+  storage.persistDoc = async (...args) => {
+    attempts++
+    if (attempts === 1) {
+      await firstSave.promise
+      throw new Error('Temporary save failure')
+    }
+    await retry.promise
+    await persist(...args)
+  }
+  t.mock.method(console, 'error', () => {})
+  server.debouncedPersist(room, true)
+  await until(() => attempts === 1)
+  server.cleanupNamespace(room, stream, 1)
+  await delay(10)
+  firstSave.resolve(undefined)
+  await until(() => attempts === 2)
+  assert.equal(await client.redis.xLen(stream), 1)
+  assert.equal(Reflect.get(server, 'namespaceDocMap').has(room), true)
+  server.cancelNamespaceCleanup(room)
+  retry.resolve(undefined)
+  await until(async () => await client.redis.xLen(stream) === 0)
+  await until(() => !Reflect.get(server, 'awaitingPersistMap').has(room))
+  assert.equal(Reflect.get(server, 'namespaceDocMap').has(room), true)
+  server.cleanupNamespace(room, stream, 1)
+  await until(() => !Reflect.get(server, 'namespaceDocMap').has(room))
+})
+
+class ControlledWorker extends EventEmitter {
+  /** @type {Array<{room: string, requestId: string, docstate: Uint8Array}>} */
+  requests = []
+  stopped = false
+
+  /** @param {{event?: string, room?: string, requestId?: string, docstate?: Uint8Array}} message */
+  postMessage (message) {
+    if (this.stopped) throw new Error('Worker stopped')
+    if (message.event === 'ping') {
+      this.emit('message', { event: 'pong' })
+    } else {
+      assert.ok(message.room && message.requestId && message.docstate)
+      this.requests.push({ room: message.room, requestId: message.requestId, docstate: message.docstate })
+    }
+  }
+
+  async terminate () {
+    this.stopped = true
+    this.emit('exit', 1)
+    return 1
+  }
+}
+
+/** @param {SocketIOServer} server @param {ControlledWorker | Worker} worker */
+function attachWorker (server, worker) {
+  Reflect.set(server, 'persistWorker', worker)
+  server.registerPersistWorkerResolve()
+  worker.emit('message', { event: 'ready' })
+}
+
+test('stale, uncorrelated, and wrong-room worker completions cannot settle a retry', async t => {
+  const { server, client, room, stream, append, load } = await persistenceCase(t)
+  await append('1000-0', createUpdates().first)
+  await load()
+  const worker = new ControlledWorker()
+  attachWorker(server, worker)
+  t.mock.method(console, 'error', () => {})
+  server.debouncedPersist(room, true)
+  await until(() => worker.requests.length === 1)
+  const first = worker.requests[0]
+  worker.emit('message', { event: 'persist-error', room, requestId: first.requestId, error: 'Save failed' })
+  await until(() => worker.requests.length === 2)
+  const second = worker.requests[1]
+  assert.notEqual(first.requestId, second.requestId)
+  worker.emit('message', { event: 'persisted', room, requestId: first.requestId })
+  worker.emit('message', { event: 'persisted', room })
+  worker.emit('message', { event: 'persisted', room: 'another-room', requestId: second.requestId })
+  await delay(10)
+  assert.equal(await client.redis.xLen(stream), 1)
+  assert.equal(Reflect.get(server, 'workerPersistRequests').size, 1)
+  worker.emit('message', { event: 'persisted', room, requestId: second.requestId })
+  await until(async () => await client.redis.xLen(stream) === 0)
+  assert.equal(Reflect.get(server, 'workerPersistRequests').size, 0)
+})
+
+for (const failure of ['error', 'exit', 'health']) {
+  test(`worker ${failure} releases pending saves and allows retry after replacement`, async t => {
+    const { server, client, room, stream, append, load } = await persistenceCase(t)
+    await append('1000-0', createUpdates().first)
+    await load()
+    const oldWorker = new ControlledWorker()
+    attachWorker(server, oldWorker)
+    const replacement = new ControlledWorker()
+    Reflect.set(server, 'getPersistWorker', () => {
+      queueMicrotask(() => replacement.emit('message', { event: 'ready' }))
+      return replacement
+    })
+    t.mock.method(console, 'error', () => {})
+    server.debouncedPersist(room, true)
+    await until(() => oldWorker.requests.length === 1)
+    oldWorker.stopped = true
+    if (failure === 'error') oldWorker.emit('error', new Error('Worker crashed'))
+    if (failure === 'exit') oldWorker.emit('exit', 1)
+    let checked = false
+    t.mock.method(server, 'workerHealthCheck', async () => {
+      const health = checked
+      checked = true
+      return health
+    })
+    server.registerPersistWorkerHealthCheck()
+    await until(() => Object.is(Reflect.get(server, 'persistWorker'), replacement))
+    // A retry may use direct persistence while the worker is unavailable.
+    await until(async () => replacement.requests.length > 0 || await client.redis.xLen(stream) === 0)
+    const request = replacement.requests[0]
+    if (request) {
+      oldWorker.emit('message', { event: 'persisted', room, requestId: request.requestId })
+      await delay(5)
+      assert.equal(await client.redis.xLen(stream), 1)
+      replacement.emit('message', { event: 'persisted', room, requestId: request.requestId })
+    }
+    await until(async () => await client.redis.xLen(stream) === 0)
+    await until(() => !Reflect.get(server, 'awaitingPersistMap').has(room))
+    assert.equal(Reflect.get(server, 'workerPersistRequests').size, 0)
+  })
+}
+
+test('the real persistence worker reports storage errors and completes a later retry', async t => {
+  const { server, client, room, stream, append, load } = await persistenceCase(t)
+  await append('1000-0', createUpdates().first)
+  await load()
+  const moduleUrl = new URL('../src/persist-worker-thread.js', import.meta.url).href
+  const worker = new Worker(`
+    const { parentPort } = require('node:worker_threads')
+    ;(async () => {
+      const { createPersistWorkerThread } = await import(${JSON.stringify(moduleUrl)})
+      const Y = await import('yjs')
+      let attempts = 0
+      createPersistWorkerThread({
+        persistDoc: async (room, docname, doc) => {
+          if (++attempts === 1) throw new Error('Storage unavailable')
+          parentPort.postMessage({ event: 'stored', state: Y.encodeStateAsUpdateV2(doc) })
+        }
+      })
+    })()
+  `, { eval: true })
+  /** @type {Array<{event: string, requestId?: string, state?: Uint8Array}>} */
+  const messages = []
+  worker.on('message', message => messages.push(message))
+  Reflect.set(server, 'persistWorker', worker)
+  server.registerPersistWorkerResolve()
+  await until(() => Reflect.get(server, 'workerReady'))
+  t.mock.method(console, 'error', () => {})
+  server.debouncedPersist(room, true)
+  await until(async () => await client.redis.xLen(stream) === 0)
+  const failed = messages.find(m => m.event === 'persist-error')
+  const succeeded = messages.find(m => m.event === 'persisted')
+  assert.ok(failed?.requestId && succeeded?.requestId)
+  assert.notEqual(failed.requestId, succeeded.requestId)
+  const state = messages.find(m => m.event === 'stored')?.state
+  assert.ok(state)
+  const saved = new Y.Doc()
+  Y.applyUpdateV2(saved, state)
+  assert.deepEqual(saved.getMap().toJSON(), { first: 1 })
+  saved.destroy()
 })

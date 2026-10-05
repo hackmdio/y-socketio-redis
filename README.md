@@ -229,7 +229,8 @@ YSR_TEST_REDIS=redis://127.0.0.1:36379 npm run test:consistency
 ```
 
 The tests use a unique key prefix and remove only their own keys. They include
-three server instances sharing Redis and a real Socket.IO reconnect.
+three server instances sharing Redis, a real Socket.IO reconnect, delayed and
+failed saves, worker replacement, and a real persistence worker thread.
 
 A sync-update ACK confirms Redis stream acceptance, not database persistence.
 Retries are appended again and safely merged by Yjs. Persistence leases use a
@@ -241,6 +242,23 @@ Lease ownership does not fence database commits. A worker dispatched before
 lease expiry can still finish after a successor starts persisting. Replacement
 storage adapters need storage-enforced commit ordering to prevent stale
 overwrites; that contract is outside this change and the storage API is unchanged.
+
+Server-side saves reload a document and its Redis stream position together,
+adding a Redis and storage read per save. The saved document is independent of
+the subscription cache. Stream trimming is bounded by that snapshot's position
+and the minimum message lifetime. `trimRoomStream(room, docid, persistedId)`
+requires a known committed position; omitting it retains the stream. Queue
+workers use the same bound, including when a task is reclaimed.
+
+Persistence worker requests and success/error replies carry a `requestId`.
+Custom worker implementations must echo it with the room; use the matching
+package version in the server and worker. Failed saves retry after the normal
+persistence delay. Worker errors, exits, and health-check replacement reject
+pending requests so later saves and namespace cleanup can proceed.
+
+These guarantees assume that storage resolves `persistDoc` only after a durable
+save and rejects on failure. Redis stream expiration and eviction are separate
+from trimming; configure retention and Redis durability for your deployment.
 
 ## License
 
