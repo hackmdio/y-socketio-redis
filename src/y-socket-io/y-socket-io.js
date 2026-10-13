@@ -177,10 +177,14 @@ export class YSocketIO {
    */
   persistentHeartbeatTimeout = null
   /**
-   * @type {Set<string>}
+   * Acquisition tokens, not server IDs: an expired lease must never be reused.
+   * @type {Map<string, string>}
    * @private
    */
-  persistentLeaderOf = new Set()
+  persistentLeaderOf = new Map()
+  /** @type {Map<string, Promise<boolean>>} */
+  pendingLeaderAcquisitions = new Map()
+  destroyed = false
   /**
    * @type {string}
    * @private
@@ -269,11 +273,7 @@ export class YSocketIO {
         'index',
         redisPrefix
       )
-      const prevAwaitCleanup = this.awaitingCleanupNamespace.get(namespace)
-      if (prevAwaitCleanup) {
-        clearTimeout(prevAwaitCleanup)
-        this.cleanupNamespace(namespace, stream)
-      }
+      this.cancelNamespaceCleanup(namespace)
 
       if (!this.namespaceMap.has(namespace)) {
         this.namespaceMap.set(namespace, socket.nsp)
@@ -348,10 +348,9 @@ export class YSocketIO {
       }
     )
 
-    /** @type {unknown} */
-    let prevMsg = null
     socket.on('sync-update', (/** @type {ArrayBuffer} */ update, /** @type {() => void} */ ack) => {
-      if (isDeepStrictEqual(update, prevMsg)) return ack()
+      // Retries are safe to append: Yjs updates are idempotent. Every ACK must
+      // follow its own successful append, including overlapping retries.
       assert(this.client)
       const namespace = this.getNamespaceString(socket.nsp)
       const message = Buffer.from(update.slice(0, update.byteLength))
@@ -363,7 +362,6 @@ export class YSocketIO {
         )
         .then(() => ack())
         .catch(console.error)
-      prevMsg = update
     })
   }
 
@@ -679,6 +677,8 @@ export class YSocketIO {
   }
 
   destroy () {
+    this.destroyed = true
+    this.pendingLeaderAcquisitions.clear()
     try {
       if (this.persistWorkerHealthCheckTimeout) {
         clearInterval(this.persistWorkerHealthCheckTimeout)
@@ -704,6 +704,12 @@ export class YSocketIO {
     })
   }
 
+  /** @param {string} namespace */
+  cancelNamespaceCleanup (namespace) {
+    clearTimeout(this.awaitingCleanupNamespace.get(namespace))
+    this.awaitingCleanupNamespace.delete(namespace)
+  }
+
   /**
    * @param {string} namespace
    * @param {string} stream
@@ -725,6 +731,13 @@ export class YSocketIO {
     const timer = setTimeout(async () => {
       const awaitingPersist = this.awaitingPersistMap.get(namespace)
       if (awaitingPersist) await awaitingPersist.promise
+      // A reconnect or a newer cleanup timer may have superseded this callback
+      // while it was waiting for persistence.
+      if (this.awaitingCleanupNamespace.get(namespace) !== timer) return
+      if (this.namespaceMap.get(namespace)?.sockets.size) {
+        this.awaitingCleanupNamespace.delete(namespace)
+        return
+      }
       this.cleanupNamespaceImpl(namespace, stream)
       this.awaitingCleanupNamespace.delete(namespace)
       logSocketIO(`no active connection, namespace: ${namespace} cleared`)
@@ -745,15 +758,28 @@ export class YSocketIO {
     this.namespaceDocMap.get(namespace)?.ydoc.destroy()
     this.namespaceDocMap.delete(namespace)
     this.namespacePersistentMap.delete(namespace)
+    const pendingPersist = this.debouncedPersistMap.get(namespace)
+    if (pendingPersist) clearTimeout(pendingPersist)
+    this.debouncedPersistMap.delete(namespace)
+    this.pendingLeaderAcquisitions.delete(namespace)
+    const token = this.persistentLeaderOf.get(namespace)
     this.persistentLeaderOf.delete(namespace)
 
-    // clear leader key in redis when we fully clean up
-    if (this.client) {
-      const key = this.getLeaderKeyOf(namespace)
-      this.client.redis
-        .del(key)
-        .catch((e) => console.error(e))
-    }
+    if (token) this.releasePersistentLeader(namespace, token).catch(console.error)
+  }
+
+  /**
+   * @param {string} namespace
+   * @param {string} token
+   */
+  async releasePersistentLeader (namespace, token) {
+    assert(this.client)
+    return this.client.redis.eval(`
+      if redis.call('GET', KEYS[1]) == ARGV[1] then
+        return redis.call('DEL', KEYS[1])
+      end
+      return 0
+    `, { keys: [this.getLeaderKeyOf(namespace)], arguments: [token] })
   }
 
   async waitUntilWorkerReady () {
@@ -819,74 +845,82 @@ export class YSocketIO {
   }
 
   async registerPersistentLeaderHeartbeat () {
+    if (this.destroyed) return
     this.persistentHeartbeatTimeout = setTimeout(async () => {
-      assert(this.client)
-      const redis = this.client.redis
-
       try {
-        /**
-         * @type {Array<Promise<any>>}
-         */
-        const promises = []
-        for (const namespace of this.persistentLeaderOf) {
-          const key = this.getLeaderKeyOf(namespace)
-          const curLeader = await redis.get(key)
-
-          // remove orphaned if exist
-          const nsp = this.namespaceMap.get(namespace)
-          const hasDoc = this.namespaceDocMap.has(namespace)
-          const hasCleanupTimer = this.awaitingCleanupNamespace.has(namespace)
-          const isActiveHere = Boolean(nsp || hasDoc || hasCleanupTimer)
-          if (!isActiveHere) {
-            logSocketIO(`clearing leader heartbeat for [${namespace}] (SID: ${this.serverId})`)
-            this.persistentLeaderOf.delete(namespace)
-            continue
-          }
-
-          if (curLeader === this.serverId) {
-            logSocketIO(`set leader heartbeat for [${namespace}] (SID: ${this.serverId})`)
-            promises.push(
-              redis.set(key, this.serverId, {
-                XX: true,
-                PX: PERSIST_LEADER_HEARTBEAT_INTERVAL
-              })
-            )
-          } else {
-            logSocketIO(`lost leadership for [${namespace}] (SID: ${this.serverId})`)
-            this.persistentLeaderOf.delete(namespace)
-          }
-        }
-
-        await promise.all(promises)
+        await this.renewPersistentLeaders()
       } catch (e) {
-        console.error(e)
+        if (!(e instanceof ClientClosedError)) console.error(e)
       }
+      this.registerPersistentLeaderHeartbeat()
+    }, PERSIST_LEADER_HEARTBEAT_INTERVAL / 2)
+  }
 
-      // register next round
-      this.persistentHeartbeatTimeout = setTimeout(
-        () => this.registerPersistentLeaderHeartbeat(),
-        PERSIST_LEADER_HEARTBEAT_INTERVAL / 2
-      )
-    })
+  async renewPersistentLeaders () {
+    assert(this.client)
+    for (const [namespace, token] of this.persistentLeaderOf) {
+      const isActiveHere = this.namespaceMap.has(namespace) ||
+        this.namespaceDocMap.has(namespace) || this.awaitingCleanupNamespace.has(namespace)
+      if (!isActiveHere) {
+        this.persistentLeaderOf.delete(namespace)
+        await this.releasePersistentLeader(namespace, token)
+        continue
+      }
+      const renewed = await this.client.redis.eval(`
+        if redis.call('GET', KEYS[1]) == ARGV[1] then
+          return redis.call('PEXPIRE', KEYS[1], ARGV[2])
+        end
+        return 0
+      `, {
+        keys: [this.getLeaderKeyOf(namespace)],
+        arguments: [token, String(PERSIST_LEADER_HEARTBEAT_INTERVAL)]
+      })
+      if (!renewed && this.persistentLeaderOf.get(namespace) === token) {
+        this.persistentLeaderOf.delete(namespace)
+      }
+    }
   }
 
   /**
    * @param {string} namespace
    */
-  async tryAcquirePersistentLeader (namespace) {
+  tryAcquirePersistentLeader (namespace) {
+    if (this.destroyed) return Promise.resolve(false)
+    const pending = this.pendingLeaderAcquisitions.get(namespace)
+    if (pending) return pending
     assert(this.client)
-    const redis = this.client.redis
-    const key = this.getLeaderKeyOf(namespace)
-    const prevVal = await redis.set(key, this.serverId, {
-      NX: true,
-      PX: PERSIST_LEADER_HEARTBEAT_INTERVAL,
-      GET: true
+    const previousToken = this.persistentLeaderOf.get(namespace) || ''
+    const newToken = `${this.serverId}:${randomUUID()}`
+    // Renew an existing acquisition atomically, or create a fresh token. A
+    // delayed release/renewal from an expired acquisition cannot touch this one.
+    const request = this.client.redis.eval(`
+      if redis.call('GET', KEYS[1]) == ARGV[1] then
+        redis.call('PEXPIRE', KEYS[1], ARGV[3])
+        return ARGV[1]
+      end
+      if redis.call('SET', KEYS[1], ARGV[2], 'NX', 'PX', ARGV[3]) then
+        return ARGV[2]
+      end
+      return false
+    `, {
+      keys: [this.getLeaderKeyOf(namespace)],
+      arguments: [previousToken, newToken, String(PERSIST_LEADER_HEARTBEAT_INTERVAL)]
+    }).then(async result => {
+      const token = typeof result === 'string' ? result : null
+      // Cleanup may have run while Redis was processing the acquisition.
+      if (this.pendingLeaderAcquisitions.get(namespace) !== request) {
+        if (token) await this.releasePersistentLeader(namespace, token)
+        return false
+      }
+      if (token) this.persistentLeaderOf.set(namespace, token)
+      else this.persistentLeaderOf.delete(namespace)
+      return token !== null
+    }).finally(() => {
+      if (this.pendingLeaderAcquisitions.get(namespace) === request) {
+        this.pendingLeaderAcquisitions.delete(namespace)
+      }
     })
-
-    const ok = prevVal === this.serverId || prevVal === null
-    if (!ok) return false
-
-    this.persistentLeaderOf.add(namespace)
-    return true
+    this.pendingLeaderAcquisitions.set(namespace, request)
+    return request
   }
 }
