@@ -7,7 +7,6 @@ import * as array from 'lib0/array'
 import * as random from 'lib0/random'
 import * as number from 'lib0/number'
 import * as promise from 'lib0/promise'
-import * as math from 'lib0/math'
 import * as protocol from './protocol.js'
 import * as env from 'lib0/environment'
 import * as logging from 'lib0/logging'
@@ -254,8 +253,7 @@ export class Api {
     }
     const now = performance.now()
     if (docstate) { Y.applyUpdateV2(ydoc, docstate.doc) }
-    let changed = false
-    ydoc.once('afterTransaction', (tr) => { changed = tr.changed.size > 0 })
+    const previousState = Y.encodeStateAsUpdateV2(ydoc)
     ydoc.transact(() => {
       docMessages?.messages.forEach(m => {
         const decoder = decoding.createDecoder(m)
@@ -281,7 +279,9 @@ export class Api {
       awareness,
       redisLastId: docMessages?.lastId.toString() || '0',
       storeReferences: docstate?.references || null,
-      changed
+      // Pending structs and delete sets also need persistence, even when no
+      // shared type changed during the transaction.
+      changed: !Buffer.from(previousState).equals(Y.encodeStateAsUpdateV2(ydoc))
     }
   }
 
@@ -296,14 +296,29 @@ export class Api {
   }
 
   /**
+   * @param {string=} persistedId
+   */
+  getTrimBoundary (persistedId) {
+    if (!persistedId || persistedId === '0') return null
+    const [ms, sequence = '0'] = persistedId.split('-')
+    const snapshotBoundary = BigInt(sequence) === (1n << 64n) - 1n
+      ? `${BigInt(ms) + 1n}-0`
+      : `${ms}-${BigInt(sequence) + 1n}`
+    const retentionBoundary = `${Math.max(0, Date.now() - this.redisMinMessageLifetime)}-0`
+    return isSmallerRedisId(snapshotBoundary, retentionBoundary) ? snapshotBoundary : retentionBoundary
+  }
+
+  /**
    * @param {string} room
    * @param {string} docid
+   * @param {string=} persistedId Last stream entry included in the committed snapshot.
    */
-  async trimRoomStream (room, docid) {
+  async trimRoomStream (room, docid, persistedId) {
+    const boundary = this.getTrimBoundary(persistedId)
+    if (!boundary) return
     const roomName = computeRedisRoomStreamName(room, docid, this.prefix)
-    const redisLastId = await this.getRedisLastId(room, docid)
-    const lastId = number.parseInt(redisLastId.split('-')[0])
-    await this.redis.xTrim(roomName, 'MINID', lastId - this.redisMinMessageLifetime)
+    // node-redis types XTRIM thresholds as numbers, but MINID accepts full IDs.
+    await this.redis.sendCommand(['XTRIM', roomName, 'MINID', boundary])
   }
 
   /**
@@ -349,41 +364,45 @@ export class Api {
       } else {
         reclaimCounts++
         const { room, docid } = decodeRedisRoomStreamName(task.stream, this.prefix)
-        const { ydoc, storeReferences, redisLastId, changed } = await this.getDoc(room, docid)
-        const lastId = math.max(number.parseInt(redisLastId.split('-')[0]), number.parseInt(task.id.split('-')[0]))
-        if (changed) {
-          logWorker(`persisting changes in room: ${room}`)
-          await this.store.persistDoc(room, docid, ydoc)
-        } else logWorker(`skip persisting room: ${room} due to no changes`)
-        await promise.all([
-          storeReferences && changed ? this.store.deleteReferences(room, docid, storeReferences) : promise.resolve(),
-          this.redis.multi()
-            .xTrim(task.stream, 'MINID', lastId - this.redisMinMessageLifetime)
-            .xAdd(this.redisWorkerStreamName, '*', { compact: task.stream })
-            .xAck(this.redisWorkerStreamName, this.redisWorkerGroupName, task.id)
-            .xDel(this.redisWorkerStreamName, task.id)
-            .sAdd(this.workerSetName, task.stream)
-            .exec()
-        ])
-        logWorker('Compacted stream ', { stream: task.stream, taskId: task.id, newLastId: lastId - this.redisMinMessageLifetime })
+        const { ydoc, awareness, storeReferences, redisLastId, changed } = await this.getDoc(room, docid)
         try {
-          if (ydocUpdateCallback != null) {
-            // call YDOC_UPDATE_CALLBACK here
-            const formData = new FormData()
-            // @todo only convert ydoc to updatev2 once
-            // @ts-ignore
-            formData.append('ydoc', new Blob([Y.encodeStateAsUpdateV2(ydoc)]))
-            // @todo should add a timeout to fetch (see fetch signal abortcontroller)
-            const res = await fetch(new URL(room, ydocUpdateCallback), { body: formData, method: 'PUT' })
-            if (!res.ok) {
-              console.error(`Issue sending data to YDOC_UPDATE_CALLBACK. status="${res.status}" statusText="${res.statusText}"`)
+          if (changed) {
+            logWorker(`persisting changes in room: ${room}`)
+            await this.store.persistDoc(room, docid, ydoc)
+          } else logWorker(`skip persisting room: ${room} due to no changes`)
+          const boundary = this.getTrimBoundary(redisLastId)
+          const transaction = this.redis.multi()
+          if (boundary) transaction.addCommand(['XTRIM', task.stream, 'MINID', boundary])
+          await promise.all([
+            storeReferences && changed ? this.store.deleteReferences(room, docid, storeReferences) : promise.resolve(),
+            transaction
+              .xAdd(this.redisWorkerStreamName, '*', { compact: task.stream })
+              .xAck(this.redisWorkerStreamName, this.redisWorkerGroupName, task.id)
+              .xDel(this.redisWorkerStreamName, task.id)
+              .sAdd(this.workerSetName, task.stream)
+              .exec()
+          ])
+          logWorker('Compacted stream ', { stream: task.stream, taskId: task.id, boundary })
+          try {
+            if (ydocUpdateCallback != null) {
+              // call YDOC_UPDATE_CALLBACK here
+              const formData = new FormData()
+              // @todo only convert ydoc to updatev2 once
+              // @ts-ignore
+              formData.append('ydoc', new Blob([Y.encodeStateAsUpdateV2(ydoc)]))
+              // @todo should add a timeout to fetch (see fetch signal abortcontroller)
+              const res = await fetch(new URL(room, ydocUpdateCallback), { body: formData, method: 'PUT' })
+              if (!res.ok) {
+                console.error(`Issue sending data to YDOC_UPDATE_CALLBACK. status="${res.status}" statusText="${res.statusText}"`)
+              }
             }
+          } catch (e) {
+            console.error(e)
           }
-        } catch (e) {
-          console.error(e)
+        } finally {
+          awareness?.destroy()
+          ydoc.destroy()
         }
-        // destroy ydoc after persisting
-        ydoc.destroy()
       }
     }))
     return { tasks, reclaimCounts }

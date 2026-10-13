@@ -21,21 +21,27 @@ export class PersistWorkerThread {
     parentPort?.postMessage({ event: 'ready' })
     parentPort?.on('message', ({ event, ...rest }) => {
       if (event === 'ping') parentPort?.postMessage({ event: 'pong' })
-      else this.persist(rest)
+      else if (event === undefined || event === 'persist') this.persist(rest)
     })
   }
 
   /**
-   * @param {{ room: string, docstate: SharedArrayBuffer }} props
+   * @param {{ room: string, requestId: string, docstate: Uint8Array }} props
    */
-  persist = async ({ room, docstate }) => {
+  persist = async ({ room, requestId, docstate }) => {
     this.log(`persisting ${room} in worker`)
     const state = new Uint8Array(docstate)
     const doc = new Y.Doc()
-    Y.applyUpdateV2(doc, state)
-    await this.store?.persistDoc(room, 'index', doc)
-    doc.destroy()
-    parentPort?.postMessage({ event: 'persisted', room })
+    try {
+      Y.applyUpdateV2(doc, state)
+      if (!this.store) throw new Error('Persistence storage is unavailable')
+      await this.store.persistDoc(room, 'index', doc)
+      parentPort?.postMessage({ event: 'persisted', room, requestId })
+    } catch (error) {
+      parentPort?.postMessage({ event: 'persist-error', room, requestId, error: String(error) })
+    } finally {
+      doc.destroy()
+    }
   }
 }
 
